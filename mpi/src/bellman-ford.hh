@@ -26,6 +26,7 @@ struct bellman_ford
         if (!MPI::Is_initialized())
             MPI::Init();
         rank = MPI::COMM_WORLD.Get_rank();
+        size = MPI::COMM_WORLD.Get_size();
         auto fin = std::ifstream{path};
         read_graph(fin);
     }
@@ -36,10 +37,15 @@ struct bellman_ford
             MPI::Finalize();
     }
 
+    template <class T>
+    auto inrange(T x, T l, T r)
+    {
+        return !(x < l) && x < r;
+    }
+
     // TODO pass stream in parameter?
     void read_graph(std::istream& is)
     {
-        if (rank) return;
         for (char ch; is >> ch; ) {
             std::string buf;
             if (ch == 'c') {
@@ -48,17 +54,24 @@ struct bellman_ford
             }
             if (ch == 'p') {
                 is >> buf >> n >> m;
+                // TODO
+                block_size = n / size;
+                auto extra = n % size;
+                start = rank       * block_size + std::min(rank,     extra);
+                end   = (rank + 1) * block_size + std::min(rank + 1, extra);
+                block_size = end - start;
                 continue;
             }
             int u, v, w;
             is >> u >> v >> w;
-            edges.emplace_back(u, v, w);
+            u--; v--;
+            if (inrange(u, start, end))
+                edges.emplace_back(u, v, w);
         }
         std::sort(std::begin(edges), std::end(edges), [](auto const& a, auto const& b) {
             return a.from  < b.from
                 || (a.from == b.from && a.to < b.to);
         });
-        transfer_graph();
     }
 
     // distribute graph from rank=0 to all others
@@ -68,21 +81,28 @@ struct bellman_ford
 
     void print()
     {
-        std::cout << "Hi from rank=" << rank << ", path=" << path << "\n";
-        if (rank == 0) {
-            std::cout << "n=" << n << " m=" << m << "\n";
-            std::cout << "edges.size()=" << edges.size() << "\n";
-        }
+        std::cout << "Hi from rank=" << rank << ", start=" << start
+            << ", end=" << end << "\n";
+        std::cout << "n=" << n << " m=" << m << " "
+            << "edges.size()=" << edges.size() << "\n";
+        int tot_size = 0;
+        int size = edges.size();
+        MPI::COMM_WORLD.Allreduce(&size, &tot_size, 1, MPI::INT, MPI::SUM);
+        std::cout << "total=" << tot_size << "\n";
     }
 
     // graph data path
     std::string path;
     int rank;
+    int size;
     // total number of nodes
     int n;
     // total number of edges
     int m;
     std::vector<edge> edges;
+    int start;
+    int end;
+    int block_size;
 };
 
 
