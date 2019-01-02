@@ -3,6 +3,7 @@
 #include <iostream>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <vector>
 #include <mpi.h>
 
@@ -13,6 +14,11 @@ struct edge
 {
     edge(int from, int to, int cost) : from(from), to(to), cost(cost) {}
 
+    static auto constexpr max() noexcept
+    {
+        return std::numeric_limits<int>::max();
+    }
+
     int from;
     int to;
     int cost;
@@ -20,7 +26,6 @@ struct edge
 
 struct bellman_ford
 {
-
     bellman_ford(std::string const& path) : path(path)
     {
         if (!MPI::Is_initialized())
@@ -74,9 +79,28 @@ struct bellman_ford
         });
     }
 
-    // distribute graph from rank=0 to all others
-    void transfer_graph()
+    auto compute(int s, int t)
     {
+        std::vector<int> dist(n, edge::max());
+        dist[s] = 0;
+        auto iter = 0;
+        for (auto relaxed = 0; ; iter++) {
+            if (!rank) {
+                std::cerr << "iterating on " << iter << " relaxed=" << relaxed << "\n";
+            }
+            relaxed = 0;
+            for (auto const& e : edges) {
+                if (dist[e.from] != edge::max() && dist[e.from] + e.cost < dist[e.to]) {
+                    dist[e.to] = dist[e.from] + e.cost;
+                    relaxed++;
+                }
+            }
+            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &relaxed, 1, MPI::INT, MPI::SUM);
+            if (!relaxed) break;
+
+            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist.data(), n, MPI::INT, MPI::MIN);
+        }
+        return dist[t];
     }
 
     void print()
@@ -104,7 +128,6 @@ struct bellman_ford
     int end;
     int block_size;
 };
-
 
 } // namespace icesp
 
