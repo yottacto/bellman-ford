@@ -22,7 +22,7 @@ clean:
 	rm -rf $(BUILD)/
 test: all
 	@echo -e "$(COLOR_ACT)running $(COLOR_ARG)$(BIN)$(COLOR_RST)..."
-	mpirun -np 8 --oversubscribe ./$(BIN)
+	time -p mpirun -np 8 --oversubscribe ./$(BIN)
 reconf:
 	@echo -e "$(COLOR_ACT)reconfiguring$(COLOR_RST)..."
 	./configure

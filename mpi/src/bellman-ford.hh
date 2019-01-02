@@ -79,15 +79,14 @@ struct bellman_ford
         });
     }
 
-    auto compute(int s, int t)
+    auto compute(int s, int t, bool info = false)
     {
         std::vector<int> dist(n, edge::max());
         dist[s] = 0;
         auto iter = 0;
         for (auto relaxed = 0; ; iter++) {
-            if (!rank) {
+            if (!rank && info)
                 std::cerr << "iterating on " << iter << " relaxed=" << relaxed << "\n";
-            }
             relaxed = 0;
             for (auto const& e : edges) {
                 if (dist[e.from] != edge::max() && dist[e.from] + e.cost < dist[e.to]) {
@@ -100,19 +99,24 @@ struct bellman_ford
 
             MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist.data(), n, MPI::INT, MPI::MIN);
         }
+        if (!rank && info)
+            std::cout << "distance from [" << s << "] to [" << t << "] is "
+                << dist[t] << "\n";
         return dist[t];
     }
 
-    void print()
+    void print(bool all = false)
     {
-        std::cout << "Hi from rank=" << rank << ", start=" << start
-            << ", end=" << end << "\n";
-        std::cout << "n=" << n << " m=" << m << " "
-            << "edges.size()=" << edges.size() << "\n";
-        int tot_size = 0;
-        int size = edges.size();
-        MPI::COMM_WORLD.Allreduce(&size, &tot_size, 1, MPI::INT, MPI::SUM);
-        std::cout << "total=" << tot_size << "\n";
+        if (all || !rank) {
+            std::cout << "Hi from rank=" << rank << ", start=" << start
+                << ", end=" << end << "\n";
+            std::cout << "n=" << n << " m=" << m << " "
+                << "edges.size()=" << edges.size() << "\n";
+            int tot_size = 0;
+            int size = edges.size();
+            MPI::COMM_WORLD.Allreduce(&size, &tot_size, 1, MPI::INT, MPI::SUM);
+            std::cout << "total=" << tot_size << "\n";
+        }
     }
 
     // graph data path
