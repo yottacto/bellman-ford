@@ -107,14 +107,13 @@ struct bellman_ford
 
     void print(bool all = false)
     {
+        int tot_size = edges.size();
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &tot_size, 1, MPI::INT, MPI::SUM);
         if (all || !rank) {
             std::cout << "Hi from rank=" << rank << ", start=" << start
                 << ", end=" << end << "\n";
             std::cout << "n=" << n << " m=" << m << " "
                 << "edges.size()=" << edges.size() << "\n";
-            int tot_size = 0;
-            int size = edges.size();
-            MPI::COMM_WORLD.Allreduce(&size, &tot_size, 1, MPI::INT, MPI::SUM);
             std::cout << "total=" << tot_size << "\n";
         }
     }
