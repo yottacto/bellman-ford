@@ -35,7 +35,7 @@ struct bellman_ford
             MPI::Init();
         rank = MPI::COMM_WORLD.Get_rank();
         size = MPI::COMM_WORLD.Get_size();
-        calc_locality(400);
+        calc_locality(10);
 
         return;
         std::ifstream fin{path};
@@ -93,7 +93,7 @@ struct bellman_ford
                 now[u] = 0;
                 for (auto v : graph[u]) {
                     now[u] += pre[v];
-                    if (cross(pre[v], now[u]))
+                    if (cross(pre[v], pre[u]))
                         count_cross_edge++;
                 }
                 now[u] /= graph[u].size();
@@ -107,7 +107,7 @@ struct bellman_ford
         // TODO do i need move?
         loc = std::move(now);
 
-        std::sort(std::begin(loc), std::end(loc));
+        // std::sort(std::begin(loc), std::end(loc));
         for (auto l : loc)
             std::cerr << l << ", ";
         std::cerr << "\n";
