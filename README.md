@@ -2,3 +2,5 @@
 
 ## MPI
 
+* each processor hold whole `dist` array
+
