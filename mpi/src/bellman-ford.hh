@@ -1,7 +1,10 @@
 #pragma once
 #include <algorithm>
 #include <iostream>
+#include <iomanip>
 #include <fstream>
+#include <random>
+#include <utility>
 #include <iterator>
 #include <limits>
 #include <vector>
@@ -32,14 +35,97 @@ struct bellman_ford
             MPI::Init();
         rank = MPI::COMM_WORLD.Get_rank();
         size = MPI::COMM_WORLD.Get_size();
-        auto fin = std::ifstream{path};
-        read_graph(fin);
+        calc_locality(400);
+
+        return;
+        std::ifstream fin{path};
+        read_graph(fin, [&](auto u, auto v, auto w) {
+            if (inrange(u, start, end))
+                edges.emplace_back(u, v, w);
+        });
     }
 
     ~bellman_ford()
     {
         if (!MPI::Is_finalized())
             MPI::Finalize();
+    }
+
+    auto locality_id(double l)
+    {
+        return static_cast<int>(l * size);
+    }
+
+    auto cross(double l1, double l2)
+    {
+        return locality_id(l1) != locality_id(l2);
+    }
+
+    void calc_locality(int iter)
+    {
+        if (rank) {
+            MPI::COMM_WORLD.Barrier();
+            return;
+        }
+        std::ifstream fin{path};
+        read_graph(fin, [&](auto u, auto v, auto) {
+            if (graph.empty())
+                graph.resize(n);
+            graph[u].emplace_back(v);
+        });
+
+        decltype(loc) now(n);
+        {
+            std::random_device rd;
+            std::mt19937 gen{rd()};
+            std::uniform_real_distribution<> dis(0.0, 1.0);
+            std::generate(std::begin(now), std::end(now), [&]() {
+                return dis(gen);
+            });
+        }
+
+        print_locality_distribution(now);
+        auto pre = now;
+        for (auto i = 0; i < iter; i++) {
+            std::swap(now, pre);
+            auto count_cross_edge = 0;
+            for (auto u = 0; u < n; u++) {
+                now[u] = 0;
+                for (auto v : graph[u]) {
+                    now[u] += pre[v];
+                    if (cross(pre[v], now[u]))
+                        count_cross_edge++;
+                }
+                now[u] /= graph[u].size();
+            }
+            std::cerr << "iter [" << i << "] "
+                << "cross ["
+                << std::left << std::setw(6)
+                << count_cross_edge << "] ";
+            print_locality_distribution(now);
+        }
+        // TODO do i need move?
+        loc = std::move(now);
+
+        std::sort(std::begin(loc), std::end(loc));
+        for (auto l : loc)
+            std::cerr << l << ", ";
+        std::cerr << "\n";
+
+        MPI::COMM_WORLD.Barrier();
+        return;
+    }
+
+    void print_locality_distribution(std::vector<double> const& loc)
+    {
+        std::vector<int> count(size);
+        for (auto l : loc)
+            count[static_cast<int>(l * size)]++;
+        std::cerr << "count: [";
+        for (auto i = 0; i < size; i++)
+            std::cerr << std::left << std::setw(7)
+                << count[i] << ", ";
+        std::cerr << "]\n";
     }
 
     template <class T>
@@ -49,7 +135,8 @@ struct bellman_ford
     }
 
     // TODO pass stream in parameter?
-    void read_graph(std::istream& is)
+    template <class InsertEdge>
+    void read_graph(std::istream& is, InsertEdge insert)
     {
         for (char ch; is >> ch; ) {
             std::string buf;
@@ -70,13 +157,12 @@ struct bellman_ford
             int u, v, w;
             is >> u >> v >> w;
             u--; v--;
-            if (inrange(u, start, end))
-                edges.emplace_back(u, v, w);
+            insert(u, v, w);
         }
-        std::sort(std::begin(edges), std::end(edges), [](auto const& a, auto const& b) {
-            return a.from  < b.from
-                || (a.from == b.from && a.to < b.to);
-        });
+        // std::sort(std::begin(edges), std::end(edges), [](auto const& a, auto const& b) {
+        //     return a.from  < b.from
+        //         || (a.from == b.from && a.to < b.to);
+        // });
     }
 
     auto compute(int s, int t, bool info = false)
@@ -126,6 +212,8 @@ struct bellman_ford
     int n;
     // total number of edges
     int m;
+    std::vector<double> loc;
+    std::vector<std::vector<int>> graph;
     std::vector<edge> edges;
     int start;
     int end;
