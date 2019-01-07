@@ -35,7 +35,7 @@ struct bellman_ford
             MPI::Init();
         rank = MPI::COMM_WORLD.Get_rank();
         size = MPI::COMM_WORLD.Get_size();
-        calc_locality(10);
+        calc_locality(10000);
 
         return;
         std::ifstream fin{path};
@@ -51,9 +51,30 @@ struct bellman_ford
             MPI::Finalize();
     }
 
+    void split(std::vector<double> const& pre)
+    {
+        loc = pre;
+        std::sort(std::begin(loc), std::end(loc));
+        pivots.clear();
+        pivots.reserve(size);
+        auto block = loc.size() / size;
+        // FIXME
+        for (auto i = 1; i < size; i++)
+            pivots.emplace_back(loc[i * block]);
+        pivots.emplace_back(2 * loc.back());
+    }
+
     auto locality_id(double l)
     {
-        return static_cast<int>(l * size);
+        return std::distance(
+            std::begin(pivots),
+            std::lower_bound(
+                std::begin(pivots),
+                std::end(pivots),
+                l
+            )
+        );
+        // return static_cast<int>(l * size);
     }
 
     auto cross(double l1, double l2)
@@ -88,15 +109,18 @@ struct bellman_ford
         auto pre = now;
         for (auto i = 0; i < iter; i++) {
             std::swap(now, pre);
+            split(pre);
             auto count_cross_edge = 0;
             for (auto u = 0; u < n; u++) {
+                // now[u] = pre[u] / (graph[u].size() + 1);
                 now[u] = 0;
                 for (auto v : graph[u]) {
-                    now[u] += pre[v];
+                    // now[u] += pre[v] / (graph[v].size() + 1);
+                    now[u] += pre[v] / graph[v].size();
                     if (cross(pre[v], pre[u]))
                         count_cross_edge++;
                 }
-                now[u] /= graph[u].size();
+                // now[u] /= (graph[u].size() + 1);
             }
             std::cerr << "iter [" << i << "] "
                 << "cross ["
@@ -108,9 +132,9 @@ struct bellman_ford
         loc = std::move(now);
 
         // std::sort(std::begin(loc), std::end(loc));
-        for (auto l : loc)
-            std::cerr << l << ", ";
-        std::cerr << "\n";
+        // for (auto l : loc)
+        //     std::cerr << l << ", ";
+        // std::cerr << "\n";
 
         MPI::COMM_WORLD.Barrier();
         return;
@@ -213,6 +237,7 @@ struct bellman_ford
     // total number of edges
     int m;
     std::vector<double> loc;
+    std::vector<double> pivots;
     std::vector<std::vector<int>> graph;
     std::vector<edge> edges;
     int start;
