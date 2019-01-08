@@ -29,18 +29,35 @@ struct edge
 
 struct bellman_ford
 {
+    auto locality_id(double l)
+    {
+        return std::distance(
+            std::begin(pivots),
+            std::lower_bound(
+                std::begin(pivots),
+                std::end(pivots),
+                l
+            )
+        );
+        // return static_cast<int>(l * size);
+    }
+
     bellman_ford(std::string const& path) : path(path)
     {
         if (!MPI::Is_initialized())
             MPI::Init();
         rank = MPI::COMM_WORLD.Get_rank();
         size = MPI::COMM_WORLD.Get_size();
-        calc_locality(10000);
+        calc_locality(20);
 
-        return;
+        split(loc);
+        loc_id.reserve(n);
+        for (auto l : loc)
+            loc_id.emplace_back(locality_id(l));
+
         std::ifstream fin{path};
         read_graph(fin, [&](auto u, auto v, auto w) {
-            if (inrange(u, start, end))
+            if (loc_id[u] == rank)
                 edges.emplace_back(u, v, w);
         });
     }
@@ -64,19 +81,6 @@ struct bellman_ford
         pivots.emplace_back(2 * loc.back());
     }
 
-    auto locality_id(double l)
-    {
-        return std::distance(
-            std::begin(pivots),
-            std::lower_bound(
-                std::begin(pivots),
-                std::end(pivots),
-                l
-            )
-        );
-        // return static_cast<int>(l * size);
-    }
-
     auto cross(double l1, double l2)
     {
         return locality_id(l1) != locality_id(l2);
@@ -86,6 +90,9 @@ struct bellman_ford
     {
         if (rank) {
             MPI::COMM_WORLD.Barrier();
+            MPI::COMM_WORLD.Bcast(&n, 1, MPI::INT, 0);
+            loc.resize(n);
+            MPI::COMM_WORLD.Bcast(loc.data(), n, MPI::DOUBLE, 0);
             return;
         }
         std::ifstream fin{path};
@@ -112,15 +119,15 @@ struct bellman_ford
             split(pre);
             auto count_cross_edge = 0;
             for (auto u = 0; u < n; u++) {
-                // now[u] = pre[u] / (graph[u].size() + 1);
-                now[u] = 0;
+                // now[u] = 0;
+                now[u] = pre[u];
                 for (auto v : graph[u]) {
-                    // now[u] += pre[v] / (graph[v].size() + 1);
-                    now[u] += pre[v] / graph[v].size();
+                    // now[u] += pre[v] / graph[v].size();
+                    now[u] += pre[v];
                     if (cross(pre[v], pre[u]))
                         count_cross_edge++;
                 }
-                // now[u] /= (graph[u].size() + 1);
+                now[u] /= (graph[u].size() + 1);
             }
             std::cerr << "iter [" << i << "] "
                 << "cross ["
@@ -137,16 +144,17 @@ struct bellman_ford
         // std::cerr << "\n";
 
         MPI::COMM_WORLD.Barrier();
-        return;
+        MPI::COMM_WORLD.Bcast(&n, 1, MPI::INT, 0);
+        MPI::COMM_WORLD.Bcast(loc.data(), n, MPI::DOUBLE, 0);
     }
 
     void print_locality_distribution(std::vector<double> const& loc)
     {
-        std::vector<int> count(size);
+        std::vector<int> count(size + 1);
         for (auto l : loc)
-            count[static_cast<int>(l * size)]++;
+            count[static_cast<int>(std::min(1., l) * size)]++;
         std::cerr << "count: [";
-        for (auto i = 0; i < size; i++)
+        for (auto i = 0; i <= size; i++)
             std::cerr << std::left << std::setw(7)
                 << count[i] << ", ";
         std::cerr << "]\n";
@@ -183,10 +191,6 @@ struct bellman_ford
             u--; v--;
             insert(u, v, w);
         }
-        // std::sort(std::begin(edges), std::end(edges), [](auto const& a, auto const& b) {
-        //     return a.from  < b.from
-        //         || (a.from == b.from && a.to < b.to);
-        // });
     }
 
     auto compute(int s, int t, bool info = false)
@@ -237,6 +241,7 @@ struct bellman_ford
     // total number of edges
     int m;
     std::vector<double> loc;
+    std::vector<int> loc_id;
     std::vector<double> pivots;
     std::vector<std::vector<int>> graph;
     std::vector<edge> edges;
