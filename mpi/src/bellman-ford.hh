@@ -5,6 +5,8 @@
 #include <iterator>
 #include <limits>
 #include <vector>
+#include <queue>
+#include <unordered_set>
 #include <mpi.h>
 
 namespace icesp
@@ -32,8 +34,18 @@ struct bellman_ford
             MPI::Init();
         rank = MPI::COMM_WORLD.Get_rank();
         size = MPI::COMM_WORLD.Get_size();
-        auto fin = std::ifstream{path};
-        read_graph(fin);
+        {
+            if (!rank)
+                std::cerr << "reading graph partition.\n";
+            auto fin = std::ifstream{path + ".metis.part.8"};
+            read_partition(fin);
+        }
+        {
+            if (!rank)
+                std::cerr << "reading graph.\n";
+            auto fin = std::ifstream{path};
+            read_graph(fin);
+        }
     }
 
     ~bellman_ford()
@@ -49,6 +61,15 @@ struct bellman_ford
     }
 
     // TODO pass stream in parameter?
+    void read_partition(std::istream& is)
+    {
+        for (int u = 0, part; is >> part; u++)
+            if (part == rank)
+                nodes.emplace(u);
+        std::cerr << rank << " has " << nodes.size() << " nodes.\n";
+    }
+
+    // TODO pass stream in parameter?
     void read_graph(std::istream& is)
     {
         for (char ch; is >> ch; ) {
@@ -59,6 +80,7 @@ struct bellman_ford
             }
             if (ch == 'p') {
                 is >> buf >> n >> m;
+                g.resize(n);
                 // TODO
                 block_size = n / size;
                 auto extra = n % size;
@@ -70,17 +92,17 @@ struct bellman_ford
             int u, v, w;
             is >> u >> v >> w;
             u--; v--;
-            if (inrange(u, start, end))
+            if (nodes.count(u)) {
                 edges.emplace_back(u, v, w);
+                g[u].emplace_back(u, v, w);
+            }
         }
-        std::sort(std::begin(edges), std::end(edges), [](auto const& a, auto const& b) {
-            return a.from  < b.from
-                || (a.from == b.from && a.to < b.to);
-        });
     }
 
     auto compute(int s, int t, bool info = false)
     {
+        if (!rank)
+            std::cerr << "computing.\n";
         std::vector<int> dist(n, edge::max());
         dist[s] = 0;
         auto iter = 0;
@@ -88,14 +110,37 @@ struct bellman_ford
             if (!rank && info)
                 std::cerr << "iterating on " << iter << " relaxed=" << relaxed << "\n";
             relaxed = 0;
-            for (auto const& e : edges) {
-                if (dist[e.from] != edge::max() && dist[e.from] + e.cost < dist[e.to]) {
-                    dist[e.to] = dist[e.from] + e.cost;
-                    relaxed++;
-                }
+            std::queue<int> q;
+            std::unordered_set<int> inqueue;
+            for (auto u : nodes) {
+                if (dist[u] == edge::max())
+                    continue;
+                inqueue.emplace(u);
+                q.emplace(u);
             }
+            while (!q.empty()) {
+                auto u = q.front();
+                q.pop();
+                // if (!rank) std::cerr << "relaxing " << u << " " << dist[u] << " " << q.size() << "\n";
+                for (auto const& e : g[u]) {
+                    if (dist[e.from] != edge::max() && dist[e.from] + e.cost < dist[e.to]) {
+                        dist[e.to] = dist[e.from] + e.cost;
+                        relaxed++;
+                        if (nodes.count(e.to) && !inqueue.count(e.to)) {
+                            q.emplace(e.to);
+                            inqueue.emplace(e.to);
+                        }
+                    }
+                }
+                inqueue.erase(u);
+            }
+            if (!rank)
+                std::cerr << "before allreduce dist.\n";
             MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &relaxed, 1, MPI::INT, MPI::SUM);
-            if (!relaxed) break;
+            if (!relaxed) {
+                std::cerr << "--> " << rank << " stop relaxing at " << iter << "\n";
+                break;
+            }
 
             MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist.data(), n, MPI::INT, MPI::MIN);
         }
@@ -127,9 +172,13 @@ struct bellman_ford
     // total number of edges
     int m;
     std::vector<edge> edges;
+    std::vector<std::vector<edge>> g;
     int start;
     int end;
     int block_size;
+
+    // nodes belong to this rank
+    std::unordered_set<int> nodes;
 };
 
 } // namespace icesp

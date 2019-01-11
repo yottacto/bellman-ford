@@ -92,6 +92,6 @@ struct graph
 
 int main()
 {
-    graph g("../dataset/USA-road-d.USA.gr");
+    graph g("../dataset/USA-road-d.CAL.gr");
 }
 
