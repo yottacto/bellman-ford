@@ -28,11 +28,9 @@ void duration(int rank, Func f)
 int main()
 {
     // icesp::bellman_ford bf("../dataset/USA-road-d.NY.gr");
-    // icesp::bellman_ford bf("../dataset/USA-road-d.USA.gr");
-    icesp::bellman_ford bf("../dataset/USA-road-d.CAL.gr");
-    // icesp::bellman_ford bf("graphs/cross-diamond");
-    // icesp::bellman_ford bf("graphs/frucht-graph");
+    icesp::bellman_ford bf("../dataset/USA-road-d.USA.gr");
+    // icesp::bellman_ford bf("../dataset/USA-road-d.CAL.gr");
     // bf.print();
-    duration(bf.rank, [&]() { bf.compute(0, 1, true); });
+    duration(bf.rank, [&]() { bf.compute(0, 444, true); });
 }
 

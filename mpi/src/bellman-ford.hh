@@ -26,6 +26,11 @@ struct edge
     int cost;
 };
 
+auto operator<(edge const& a, edge const& b)
+{
+    return a.cost > b.cost;
+}
+
 struct bellman_ford
 {
     bellman_ford(std::string const& path) : path(path)
@@ -46,6 +51,9 @@ struct bellman_ford
             auto fin = std::ifstream{path};
             read_graph(fin);
         }
+
+        recv_count = max_border_nodes_count + cross_edge_count;
+        recv_buf.reserve(recv_count * size * 2);
     }
 
     ~bellman_ford()
@@ -66,12 +74,12 @@ struct bellman_ford
         for (int u = 0, part; is >> part; u++)
             if (part == rank)
                 nodes.emplace(u);
-        std::cerr << rank << " has " << nodes.size() << " nodes.\n";
     }
 
     // TODO pass stream in parameter?
     void read_graph(std::istream& is)
     {
+        cross_edge_count = 0;
         for (char ch; is >> ch; ) {
             std::string buf;
             if (ch == 'c') {
@@ -81,12 +89,6 @@ struct bellman_ford
             if (ch == 'p') {
                 is >> buf >> n >> m;
                 g.resize(n);
-                // TODO
-                block_size = n / size;
-                auto extra = n % size;
-                start = rank       * block_size + std::min(rank,     extra);
-                end   = (rank + 1) * block_size + std::min(rank + 1, extra);
-                block_size = end - start;
                 continue;
             }
             int u, v, w;
@@ -95,59 +97,98 @@ struct bellman_ford
             if (nodes.count(u)) {
                 edges.emplace_back(u, v, w);
                 g[u].emplace_back(u, v, w);
+                if (!nodes.count(v)) {
+                    border_nodes.emplace(u);
+                    cross_edge_count++;
+                }
             }
         }
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &cross_edge_count, 1, MPI::INT, MPI::SUM);
+        max_border_nodes_count = border_nodes.size();
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &max_border_nodes_count, 1, MPI::INT, MPI::MAX);
+        cross_edge_count /= 2;
+        if (!rank)
+            std::cerr << "cross edge: " << cross_edge_count <<
+                ", max border nodes: " << max_border_nodes_count << "\n";
     }
 
     auto compute(int s, int t, bool info = false)
     {
         if (!rank)
             std::cerr << "computing.\n";
-        std::vector<int> dist(n, edge::max());
-        dist[s] = 0;
+        std::vector<int> dist_now(n, edge::max());
+        auto dist_pre = dist_now;
+
+        std::priority_queue<edge> pq;
+        if (nodes.count(s)) {
+            dist_now[s] = dist_pre[s] = 0;
+            pq.emplace(s, s, 0);
+        }
         auto iter = 0;
         for (auto relaxed = 0; ; iter++) {
             if (!rank && info)
-                std::cerr << "iterating on " << iter << " relaxed=" << relaxed << "\n";
+                std::cerr << "iterating on " << iter << ", relaxed=" << relaxed << "\n";
             relaxed = 0;
-            std::queue<int> q;
-            std::unordered_set<int> inqueue;
-            for (auto u : nodes) {
-                if (dist[u] == edge::max())
-                    continue;
-                inqueue.emplace(u);
-                q.emplace(u);
-            }
-            while (!q.empty()) {
-                auto u = q.front();
-                q.pop();
-                // if (!rank) std::cerr << "relaxing " << u << " " << dist[u] << " " << q.size() << "\n";
+            while (!pq.empty()) {
+                auto u = pq.top().to;
+                auto dis = pq.top().cost;
+                pq.pop();
+                if (dist_now[u] < dis) continue;
+
                 for (auto const& e : g[u]) {
-                    if (dist[e.from] != edge::max() && dist[e.from] + e.cost < dist[e.to]) {
-                        dist[e.to] = dist[e.from] + e.cost;
+                    auto v = e.to;
+                    auto c = e.cost;
+                    if (dist_now[u] != edge::max() && dist_now[v] > dist_now[u] + c) {
+                        dist_now[v] = dist_now[u] + c;
+                        pq.emplace(u, v, dist_now[v]);
                         relaxed++;
-                        if (nodes.count(e.to) && !inqueue.count(e.to)) {
-                            q.emplace(e.to);
-                            inqueue.emplace(e.to);
-                        }
                     }
                 }
-                inqueue.erase(u);
-            }
-            if (!rank)
-                std::cerr << "before allreduce dist.\n";
-            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &relaxed, 1, MPI::INT, MPI::SUM);
-            if (!relaxed) {
-                std::cerr << "--> " << rank << " stop relaxing at " << iter << "\n";
-                break;
             }
 
-            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist.data(), n, MPI::INT, MPI::MIN);
+            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &relaxed, 1, MPI::INT, MPI::SUM);
+            if (!relaxed)
+                break;
+
+            update_dist(dist_now, dist_pre);
+
+            for (auto u : nodes)
+                if (dist_now[u] != dist_pre[u])
+                    pq.emplace(s, u, dist_now[u]);
+            dist_pre = dist_now;
         }
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &dist_now[t], n, MPI::INT, MPI::MIN);
         if (!rank && info)
             std::cout << "distance from [" << s << "] to [" << t << "] is "
-                << dist[t] << "\n";
-        return dist[t];
+                << dist_now[t] << "\n";
+        return dist_now[t];
+    }
+
+    void update_dist(std::vector<int>& dist_now, std::vector<int> const& dist_pre)
+    {
+        recv_buf.clear();
+        for (auto i = 0; i < n; i++) {
+            if (dist_now[i] == dist_pre[i]
+                    || (nodes.count(i) && !border_nodes.count(i)))
+                continue;
+            recv_buf.emplace_back(i);
+            recv_buf.emplace_back(dist_now[i]);
+        }
+
+        recv_buf.resize(recv_count * 2 * size, -1);
+        MPI::COMM_WORLD.Allgather(
+            MPI::IN_PLACE, 0, MPI::DATATYPE_NULL,
+            recv_buf.data(), recv_count * 2, MPI::INT
+        );
+
+        for (auto i = 0u; i < recv_buf.size(); i += 2) {
+            auto id = recv_buf[i];
+            auto value = recv_buf[i + 1];
+            if (id != -1)
+                dist_now[id] = std::min(dist_now[id], value);
+        }
+
+        // MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist_now.data(), n, MPI::INT, MPI::MIN);
     }
 
     void print(bool all = false)
@@ -155,8 +196,6 @@ struct bellman_ford
         int tot_size = edges.size();
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &tot_size, 1, MPI::INT, MPI::SUM);
         if (all || !rank) {
-            std::cout << "Hi from rank=" << rank << ", start=" << start
-                << ", end=" << end << "\n";
             std::cout << "n=" << n << " m=" << m << " "
                 << "edges.size()=" << edges.size() << "\n";
             std::cout << "total=" << tot_size << "\n";
@@ -173,12 +212,16 @@ struct bellman_ford
     int m;
     std::vector<edge> edges;
     std::vector<std::vector<edge>> g;
-    int start;
-    int end;
     int block_size;
 
     // nodes belong to this rank
     std::unordered_set<int> nodes;
+    std::unordered_set<int> border_nodes;
+    int max_border_nodes_count;
+    int cross_edge_count;
+
+    int recv_count;
+    std::vector<int> recv_buf;
 };
 
 } // namespace icesp
