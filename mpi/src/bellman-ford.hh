@@ -157,7 +157,7 @@ struct bellman_ford
                     pq.emplace(s, u, dist_now[u]);
             dist_pre = dist_now;
         }
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &dist_now[t], n, MPI::INT, MPI::MIN);
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &dist_now[t], 1, MPI::INT, MPI::MIN);
         if (!rank && info)
             std::cout << "distance from [" << s << "] to [" << t << "] is "
                 << dist_now[t] << "\n";
@@ -176,19 +176,27 @@ struct bellman_ford
         }
 
         recv_buf.resize(recv_count * 2 * size, -1);
+
+        std::swap_ranges(
+            std::begin(recv_buf),
+            std::next(std::begin(recv_buf), recv_count * 2),
+            std::next(std::begin(recv_buf), recv_count * 2 * rank)
+        );
+
         MPI::COMM_WORLD.Allgather(
             MPI::IN_PLACE, 0, MPI::DATATYPE_NULL,
             recv_buf.data(), recv_count * 2, MPI::INT
         );
 
+        auto updated = 0;
         for (auto i = 0u; i < recv_buf.size(); i += 2) {
             auto id = recv_buf[i];
             auto value = recv_buf[i + 1];
-            if (id != -1)
+            if (id != -1) {
                 dist_now[id] = std::min(dist_now[id], value);
+                updated++;
+            }
         }
-
-        // MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist_now.data(), n, MPI::INT, MPI::MIN);
     }
 
     void print(bool all = false)
