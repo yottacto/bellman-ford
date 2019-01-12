@@ -22,6 +22,7 @@ clean:
 	rm -rf $(BUILD)/
 test: all
 	@echo -e "$(COLOR_ACT)running $(COLOR_ARG)$(BIN)$(COLOR_RST)..."
+	date
 	time -p mpirun -np 8 --oversubscribe ./$(BIN)
 reconf:
 	@echo -e "$(COLOR_ACT)reconfiguring$(COLOR_RST)..."
@@ -36,7 +37,7 @@ $(BUILD)/:
 $(BUILD)/src: | $(BUILD)/
 	@echo -e "$(COLOR_ACT)making directory $(COLOR_ARG)$(BUILD)/src$(COLOR_RST)..."
 	mkdir -p $(BUILD)/src
-$(BUILD)/src/main.o: src/main.cc src/bellman-ford.hh | $(BUILD)/src
+$(BUILD)/src/main.o: src/main.cc src/sssp.hh | $(BUILD)/src
 	@echo -e "$(COLOR_ACT)compiling $(COLOR_ARG)src/main.cc$(COLOR_RST)..."
 	$(CC) -c -o '$@' '$<' $(CCFLAGS)
 $(BIN): $(OBJECTS) | $(BUILD)/

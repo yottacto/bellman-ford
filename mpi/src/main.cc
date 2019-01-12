@@ -1,15 +1,16 @@
 #include <iostream>
 #include <chrono>
+#include <utility>
 #include "sssp.hh"
 
-template <class Func>
-void duration(int rank, Func f)
+template <class Func, class... Args>
+void duration(int rank, Func f, Args... args)
 {
     using namespace std::chrono;
 
     MPI::COMM_WORLD.Barrier();
     auto start = high_resolution_clock::now();
-    f();
+    f(std::forward<Args>(args)...);
     auto end = high_resolution_clock::now();
 
     auto elapsed = duration_cast<milliseconds>(end - start).count() / 1000.;
@@ -27,11 +28,11 @@ void duration(int rank, Func f)
 
 int main()
 {
-    icesp::sssp bf("../dataset/USA-road-d.NY.gr");
-    // icesp::sssp bf("../dataset/USA-road-d.USA.gr");
+    // icesp::sssp bf("../dataset/USA-road-d.NY.gr");
+    icesp::sssp bf("../dataset/USA-road-d.USA.gr");
     // icesp::sssp bf("../dataset/USA-road-d.CAL.gr");
     // bf.print();
-    // duration(bf.rank, [&]() { bf.compute(0, 2000000, true); });
-    duration(bf.rank, [&]() { bf.compute(0, 200000, true); });
+    // duration(bf.rank, [&]() { bf.compute(0, 2000000); });
+    duration(bf.rank, [&]() { bf.compute(0, 200000); });
 }
 

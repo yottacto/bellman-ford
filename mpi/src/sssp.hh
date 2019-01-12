@@ -7,10 +7,27 @@
 #include <vector>
 #include <queue>
 #include <unordered_set>
+#include <unordered_map>
 #include <mpi.h>
+
+#include <chrono>
 
 namespace icesp
 {
+
+template <class T>
+void bin_read(std::istream& i, T* x)
+{
+    i.read(reinterpret_cast<char*>(x), sizeof(*x));
+    if (!i) throw std::runtime_error{"binary read failed"};
+}
+
+template <class T>
+void bin_write(std::ostream& o, T* x)
+{
+    o.write(reinterpret_cast<char*>(x), sizeof(*x));
+    if (!o) throw std::runtime_error{"binary write failed"};
+}
 
 struct edge
 {
@@ -39,20 +56,33 @@ struct sssp
             MPI::Init();
         rank = MPI::COMM_WORLD.Get_rank();
         size = MPI::COMM_WORLD.Get_size();
+
         {
+            using namespace std::chrono;
+            auto start = high_resolution_clock::now();
+            read_partition(path);
+            auto end = high_resolution_clock::now();
+            auto elapsed = duration_cast<milliseconds>(end - start).count() / 1000.;
             if (!rank)
-                std::cerr << "reading graph partition.\n";
-            auto fin = std::ifstream{path + ".metis.part.8"};
-            read_partition(fin);
-        }
-        {
-            if (!rank)
-                std::cerr << "reading graph.\n";
-            auto fin = std::ifstream{path};
-            read_graph(fin);
+                std::cerr << "read partition elapsed <" << elapsed << "s>\n";
         }
 
-        recv_count = max_border_nodes_count + cross_edge_count;
+        {
+            using namespace std::chrono;
+            auto start = high_resolution_clock::now();
+            read_graph(path);
+            auto end = high_resolution_clock::now();
+            auto elapsed = duration_cast<milliseconds>(end - start).count() / 1000.;
+            if (!rank)
+                std::cerr << "read graph elapsed <" << elapsed << "s>\n";
+        }
+
+        recv_count = max_border_node_count + cross_edge_count;
+        if (!rank)
+            std::cerr << "recv_count=" << recv_count
+                << ", max_border_node_count=" << max_border_node_count
+                << ", cross_edge_count=" << cross_edge_count
+                << "\n";
         recv_buf.reserve(recv_count * size * 2);
     }
 
@@ -68,56 +98,158 @@ struct sssp
         return !(x < l) && x < r;
     }
 
-    // TODO pass stream in parameter?
-    void read_partition(std::istream& is)
+    std::string binary_file_name(std::string const& path)
     {
-        for (int u = 0, part; is >> part; u++)
-            if (part == rank)
-                nodes.emplace(u);
+        return path + ".binary." + std::to_string(size)
+            + ".rank." + std::to_string(rank);
     }
 
     // TODO pass stream in parameter?
-    void read_graph(std::istream& is)
+    void read_partition(std::string const& base_path)
     {
-        cross_edge_count = 0;
-        for (char ch; is >> ch; ) {
-            std::string buf;
-            if (ch == 'c') {
-                std::getline(is, buf);
-                continue;
+        auto path = base_path + ".metis.part.8";
+        auto has_binary = std::ifstream{
+            binary_file_name(path),
+            std::ios::binary
+        }.good();
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &has_binary, 1, MPI::BOOL, MPI::LAND);
+
+        if (has_binary) {
+            if (!rank)
+                std::cerr << "reading binary graph partition file.\n";
+            auto fin = std::ifstream{binary_file_name(path), std::ios::binary};
+            int count;
+            bin_read(fin, &count);
+            for (int u; count--; ) {
+                bin_read(fin, &u);
+                nodes.emplace(u);
             }
-            if (ch == 'p') {
-                is >> buf >> n >> m;
-                g.resize(n);
-                continue;
-            }
-            int u, v, w;
-            is >> u >> v >> w;
-            u--; v--;
-            if (nodes.count(u)) {
-                edges.emplace_back(u, v, w);
+        } else {
+            if (!rank)
+                std::cerr << "reading normal graph partition file.\n";
+            auto fin = std::ifstream{path};
+            auto fout = std::ofstream{binary_file_name(path), std::ios::binary};
+            for (int u = 0, part; fin >> part; u++)
+                if (part == rank)
+                    nodes.emplace(u);
+            int count = nodes.size();
+            bin_write(fout, &count);
+            for (auto u : nodes)
+                bin_write(fout, &u);
+        }
+    }
+
+    // TODO pass stream in parameter?
+    void read_graph(std::string const& path)
+    {
+        auto has_binary = std::ifstream{
+            binary_file_name(path),
+            std::ios::binary
+        }.good();
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &has_binary, 1, MPI::BOOL, MPI::LAND);
+
+        if (has_binary) {
+            if (!rank)
+                std::cerr << "reading binary graph file\n";
+            auto fin = std::ifstream{binary_file_name(path), std::ios::binary};
+            bin_read(fin, &n);
+            bin_read(fin, &m);
+            g.resize(n);
+            if (!rank)
+                std::cerr << "n=" << n << ", m=" << m << "\n";
+            int edge_count;
+            bin_read(fin, &edge_count);
+            for (int u, v, w; edge_count--; ) {
+                bin_read(fin, &u);
+                bin_read(fin, &v);
+                bin_read(fin, &w);
                 g[u].emplace_back(u, v, w);
-                if (!nodes.count(v)) {
-                    border_nodes.emplace(u);
-                    cross_edge_count++;
+                // dist_now[u] = dist_now[v] = edge::max();
+            }
+
+            int border_node_count;
+            bin_read(fin, &border_node_count);
+            for (int u; border_node_count--; ) {
+                bin_read(fin, &u);
+                border_nodes.emplace(u);
+            }
+            bin_read(fin, &max_border_node_count);
+            bin_read(fin, &cross_edge_count);
+        } else {
+            if (!rank)
+                std::cerr << "reading normal graph file\n";
+            auto fin = std::ifstream{path};
+            auto fout = std::ofstream{binary_file_name(path), std::ios::binary};
+            auto edge_count = 0;
+            for (char ch; fin >> ch; ) {
+                std::string buf;
+                if (ch == 'c') {
+                    std::getline(fin, buf);
+                } else if (ch == 'p') {
+                    fin >> buf >> n >> m;
+                    bin_write(fout, &n);
+                    bin_write(fout, &m);
+                    g.resize(n);
+                } else {
+                    int u, v, w;
+                    fin >> u >> v >> w;
+                    u--; v--;
+                    // dist_now[u] = dist_now[v] = edge::max();
+                    if (nodes.count(u)) {
+                        edge_count++;
+                        g[u].emplace_back(u, v, w);
+                        if (!nodes.count(v)) {
+                            border_nodes.emplace(u);
+                            cross_edge_count++;
+                        }
+                    }
                 }
             }
+            if (!rank)
+                std::cerr << "writing edges\n";
+            bin_write(fout, &edge_count);
+            for (auto u = 0; u < n; u++)
+                for (auto& e : g[u]) {
+                    bin_write(fout, &e.from);
+                    bin_write(fout, &e.to);
+                    bin_write(fout, &e.cost);
+                }
+            if (!rank)
+                std::cerr << "allreduce cross edge\n";
+            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &cross_edge_count, 1, MPI::INT, MPI::SUM);
+            max_border_node_count = border_nodes.size();
+            if (!rank)
+                std::cerr << "allreduce max border node\n";
+            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &max_border_node_count, 1, MPI::INT, MPI::MAX);
+            cross_edge_count /= 2;
+
+            if (!rank)
+                std::cerr << "writing border nodes\n";
+            int border_node_count = border_nodes.size();
+            bin_write(fout, &border_node_count);
+            for (auto u : border_nodes)
+                bin_write(fout, &u);
+            if (!rank)
+                std::cerr << "writing max_border_node_count\n";
+            bin_write(fout, &max_border_node_count);
+            bin_write(fout, &cross_edge_count);
         }
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &cross_edge_count, 1, MPI::INT, MPI::SUM);
-        max_border_nodes_count = border_nodes.size();
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &max_border_nodes_count, 1, MPI::INT, MPI::MAX);
-        cross_edge_count /= 2;
+
+        MPI::COMM_WORLD.Barrier();
         if (!rank)
             std::cerr << "cross edge: " << cross_edge_count <<
-                ", max border nodes: " << max_border_nodes_count << "\n";
+                ", max border nodes: " << max_border_node_count << "\n";
+
+        dist_now.resize(n, edge::max());
+        dist_pre = dist_now;
+
+        MPI::COMM_WORLD.Barrier();
     }
 
-    auto compute(int s, int t, bool info = false)
+    auto compute(int s, int t)
     {
         if (!rank)
             std::cerr << "computing.\n";
-        std::vector<int> dist_now(n, edge::max());
-        auto dist_pre = dist_now;
 
         std::priority_queue<edge> pq;
         if (nodes.count(s)) {
@@ -126,9 +258,12 @@ struct sssp
         }
         auto iter = 0;
         for (auto relaxed = 0; ; iter++) {
-            if (!rank && info)
-                std::cerr << "iterating on " << iter << ", relaxed=" << relaxed << "\n";
+            if (!rank)
+                std::cerr << "iterating on " << iter << ", relaxed=" << relaxed << ", ";
             relaxed = 0;
+
+            using namespace std::chrono;
+            auto start = high_resolution_clock::now();
             while (!pq.empty()) {
                 auto u = pq.top().to;
                 auto dis = pq.top().cost;
@@ -145,31 +280,54 @@ struct sssp
                     }
                 }
             }
+            auto end = high_resolution_clock::now();
+            auto elapsed = duration_cast<milliseconds>(end - start).count() / 1000.;
+            if (!rank)
+                std::cerr << "dij elapsed <" << elapsed << "s>, ";
 
             MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &relaxed, 1, MPI::INT, MPI::SUM);
             if (!relaxed)
                 break;
 
-            update_dist(dist_now, dist_pre);
+            {
+                using namespace std::chrono;
+                auto start = high_resolution_clock::now();
+                update_dist(dist_now, dist_pre);
+                auto end = high_resolution_clock::now();
+                auto elapsed = duration_cast<milliseconds>(end - start).count() / 1000.;
+                if (!rank)
+                    std::cerr << "update dist elapsed <" << elapsed << "s>\n";
+            }
 
             for (auto u : nodes)
                 if (dist_now[u] != dist_pre[u])
                     pq.emplace(s, u, dist_now[u]);
             dist_pre = dist_now;
         }
+
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &dist_now[t], 1, MPI::INT, MPI::MIN);
-        if (!rank && info)
+        if (!rank)
             std::cout << "distance from [" << s << "] to [" << t << "] is "
                 << dist_now[t] << "\n";
         return dist_now[t];
     }
 
-    void update_dist(std::vector<int>& dist_now, std::vector<int> const& dist_pre)
+    template <class T>
+    void update_dist(T& dist_now, T const& dist_pre)
     {
         recv_buf.clear();
+
+        // for (auto const& p : dist_now) {
+        //     auto i = p.first;
+        //     auto d = p.second;
+        //     if (d == dist_pre.at(i) || (nodes.count(i) && !border_nodes.count(i)))
+        //         continue;
+        //     recv_buf.emplace_back(i);
+        //     recv_buf.emplace_back(d);
+        // }
+
         for (auto i = 0; i < n; i++) {
-            if (dist_now[i] == dist_pre[i]
-                    || (nodes.count(i) && !border_nodes.count(i)))
+            if (dist_now.at(i) == dist_pre.at(i) || (nodes.count(i) && !border_nodes.count(i)))
                 continue;
             recv_buf.emplace_back(i);
             recv_buf.emplace_back(dist_now[i]);
@@ -193,7 +351,7 @@ struct sssp
             auto id = recv_buf[i];
             auto value = recv_buf[i + 1];
             if (id != -1) {
-                dist_now[id] = std::min(dist_now[id], value);
+                dist_now.at(id) = std::min(dist_now.at(id), value);
                 updated++;
             }
         }
@@ -201,12 +359,8 @@ struct sssp
 
     void print(bool all = false)
     {
-        int tot_size = edges.size();
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &tot_size, 1, MPI::INT, MPI::SUM);
         if (all || !rank) {
-            std::cout << "n=" << n << " m=" << m << " "
-                << "edges.size()=" << edges.size() << "\n";
-            std::cout << "total=" << tot_size << "\n";
+            std::cout << "n=" << n << " m=" << m << "\n";
         }
     }
 
@@ -218,15 +372,19 @@ struct sssp
     int n;
     // total number of edges
     int m;
-    std::vector<edge> edges;
     std::vector<std::vector<edge>> g;
-    int block_size;
+    // std::unordered_map<int, std::vector<edge>> g;
 
     // nodes belong to this rank
     std::unordered_set<int> nodes;
     std::unordered_set<int> border_nodes;
-    int max_border_nodes_count;
-    int cross_edge_count;
+    int max_border_node_count;
+    int cross_edge_count{0};
+
+    std::vector<int> dist_now;
+    std::vector<int> dist_pre;
+    // std::unordered_map<int, int> dist_now;
+    // std::unordered_map<int, int> dist_pre;
 
     int recv_count;
     std::vector<int> recv_buf;
