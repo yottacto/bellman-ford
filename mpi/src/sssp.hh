@@ -31,9 +31,9 @@ auto operator<(edge const& a, edge const& b)
     return a.cost > b.cost;
 }
 
-struct bellman_ford
+struct sssp
 {
-    bellman_ford(std::string const& path) : path(path)
+    sssp(std::string const& path) : path(path)
     {
         if (!MPI::Is_initialized())
             MPI::Init();
@@ -56,7 +56,7 @@ struct bellman_ford
         recv_buf.reserve(recv_count * size * 2);
     }
 
-    ~bellman_ford()
+    ~sssp()
     {
         if (!MPI::Is_finalized())
             MPI::Finalize();
