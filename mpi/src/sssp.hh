@@ -286,15 +286,21 @@ struct sssp
             auto compute_elapsed = compute_timer.elapsed_seconds();
             total_comm += comm_elapsed;
             total_compute += compute_elapsed;
+
             if (Enabled) {
-                for (auto i = 0; i < size; i++) {
-                    if (rank == i)
-                        std::cerr << "rank: " << rank
-                            << ", compute " << std::setw(5) << compute_elapsed
-                            << ", comm " << std::setw(5) << comm_elapsed
-                            << std::endl;
-                    MPI::COMM_WORLD.Barrier();
-                }
+                auto source = rank - 1;
+                auto target = rank + 1;
+                if (source < 0)
+                    source = MPI::PROC_NULL;
+                if (target >= size)
+                    target = MPI::PROC_NULL;
+
+                MPI::COMM_WORLD.Recv(nullptr, 0, MPI::BYTE, source, 0);
+                std::cerr << "rank: " << rank
+                    << ", compute " << std::setw(5) << compute_elapsed
+                    << ", comm " << std::setw(5) << comm_elapsed
+                    << std::endl;
+                MPI::COMM_WORLD.Send(nullptr, 0, MPI::BYTE, target, 0);
             }
 
             total_timer.start();
