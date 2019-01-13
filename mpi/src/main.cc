@@ -11,7 +11,7 @@ int main()
     auto t = config.front().t;
 
     icesp::sssp bf{path};
-    icesp::duration(bf.rank, [&]() { bf.compute<true>(s, t); });
+    bf.compute<true>(s, t);
     bf.print_statistic();
 }
 

@@ -204,6 +204,7 @@ struct sssp
         last_updated.resize(n);
         dist_now.resize(n, edge::max());
         dist_pre = dist_now;
+        pos.resize(n);
 
         MPI::COMM_WORLD.Barrier();
     }
@@ -213,6 +214,13 @@ struct sssp
     {
         print<Enabled>("computing.\n");
 
+        total_timer.restart();
+        dist_now.clear();
+        dist_now.resize(n, edge::max());
+        dist_pre = dist_now;
+        pos.clear();
+        pos.resize(n);
+
         std::priority_queue<edge> pq;
         if (nodes.count(s)) {
             dist_now[s] = dist_pre[s] = 0;
@@ -221,16 +229,18 @@ struct sssp
 
         // statisitc
         updated.clear();
-        total_dij = 0.;
-        total_update = 0.;
+        total_compute = 0.;
+        total_comm = 0.;
 
         iter = 0;
         recv_empty = false;
         for (; !recv_empty; iter++) {
-            print<Enabled>("iterating on ", iter, ", ");
+            print<Enabled>("iterating on ", iter, ", \n");
 
-            auto t{timer{}};
-            t.restart();
+            auto updated_count{0};
+            recv_buf.clear();
+            auto len = 0;
+            compute_timer.restart();
             while (!pq.empty()) {
                 auto u = pq.top().to;
                 auto dis = pq.top().cost;
@@ -243,62 +253,76 @@ struct sssp
                     if (dist_now[u] != edge::max() && dist_now[v] > dist_now[u] + c) {
                         dist_now[v] = dist_now[u] + c;
                         pq.emplace(u, v, dist_now[v]);
+
+                        // TODO optimize here
+                        if (!nodes.count(v) || border_nodes.count(v)) {
+                            if (pos[v].first == iter + 1) {
+                                recv_buf[pos[v].second + 1] = dist_now[v];
+                            } else {
+                                auto p = len;
+                                pos[v] = {iter + 1, p};
+                                updated_count++;
+                                recv_buf.emplace_back(v);
+                                recv_buf.emplace_back(dist_now[v]);
+                                len += 2;
+                            }
+                        } else {
+                            if (pos[v].first != iter + 1) {
+                                pos[v].first = iter + 1;
+                                updated_count++;
+                            }
+                        }
                     }
                 }
             }
-            t.stop();
-            auto elapsed = t.elapsed_seconds();
-            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &elapsed, 1, MPI::DOUBLE, MPI::MAX);
-            total_dij += elapsed;
-            print<Enabled>("dij elapsed ", elapsed, "s, ");
 
-            t.restart();
             update_dist(dist_now, dist_pre);
+            comm_timer.stop();
+            total_timer.stop();
+
+            updated.emplace_back(size);
+            updated.at(iter).at(rank) = updated_count;
+            auto comm_elapsed = comm_timer.elapsed_seconds();
+            auto compute_elapsed = compute_timer.elapsed_seconds();
+            total_comm += comm_elapsed;
+            total_compute += compute_elapsed;
+            if (Enabled) {
+                for (auto i = 0; i < size; i++) {
+                    if (rank == i)
+                        std::cerr << "rank: " << rank
+                            << ", compute " << std::setw(5) << compute_elapsed
+                            << ", comm " << std::setw(5) << comm_elapsed
+                            << std::endl;
+                    MPI::COMM_WORLD.Barrier();
+                }
+            }
+
+            total_timer.start();
             for (auto u : nodes)
                 if (dist_now[u] != dist_pre[u]) {
                     pq.emplace(s, u, dist_now[u]);
                     dist_pre[u] = dist_now[u];
                 }
-            t.stop();
-            elapsed = t.elapsed_seconds();
-            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &elapsed, 1, MPI::DOUBLE, MPI::MAX);
-            total_update += elapsed;
-            print<Enabled>("update dist elapsed ", elapsed, "s, ");
 
             print<Enabled>("\n");
-
-            if (recv_empty)
-                break;
         }
 
+        total_timer.stop();
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &dist_now[t], 1, MPI::INT, MPI::MIN);
 
         print<Enabled>("distance from [", s);
         print<Enabled>("] to [", t);
         print<Enabled>("] is ", dist_now[t], "\n");
+
+        print<Enabled>("total compute elapsed ", total_compute, ", ");
+        print<Enabled>("total comm elapsed ", total_comm, "\n");
+        print<Enabled>("total time elapsed ", total_timer.elapsed_seconds(), "\n");
         return dist_now[t];
     }
 
     template <class T>
     void update_dist(T& dist_now, T& dist_pre)
     {
-        recv_buf.clear();
-
-        // statistic
-        auto updated_count{0};
-        for (auto i = 0; i < n; i++) {
-            if (dist_now.at(i) != dist_pre.at(i))
-                updated_count++;
-            if (dist_now.at(i) == dist_pre.at(i) || (nodes.count(i) && !border_nodes.count(i)))
-                continue;
-            recv_buf.emplace_back(i);
-            recv_buf.emplace_back(dist_now[i]);
-        }
-
-        // statistic
-        updated.emplace_back(size);
-        updated.at(iter).at(rank) = updated_count;
-
         recv_buf.resize(recv_count * 2 * size, -1);
 
         std::swap_ranges(
@@ -306,6 +330,9 @@ struct sssp
             std::next(std::begin(recv_buf), recv_count * 2),
             std::next(std::begin(recv_buf), recv_count * 2 * rank)
         );
+
+        compute_timer.stop();
+        comm_timer.restart();
 
         MPI::COMM_WORLD.Allgather(
             MPI::IN_PLACE, 0, MPI::DATATYPE_NULL,
@@ -386,9 +413,6 @@ struct sssp
                     xor_sum ^= dist_now[i];
             std::cerr << "\nunreachable nodes: " << unreachable << "\n";
             std::cerr << "all distance xor: " << xor_sum << "\n\n";
-
-            std::cerr << "\ntotal dij: " << total_dij << "s, "
-                << "total_update: " << total_update << "s\n";
         }
     }
 
@@ -401,6 +425,7 @@ struct sssp
     // total number of edges
     int m;
     std::vector<std::vector<edge>> g;
+    std::vector<std::pair<int, int>> pos;
     // std::unordered_map<int, std::vector<edge>> g;
 
     // nodes belong to this rank
@@ -422,8 +447,11 @@ struct sssp
     int iter;
     std::vector<std::vector<int>> updated;
     std::vector<int> last_updated;
-    double total_dij;
-    double total_update;
+    double total_compute;
+    double total_comm;
+    timer compute_timer;
+    timer comm_timer;
+    timer total_timer;
 };
 
 } // namespace icesp
