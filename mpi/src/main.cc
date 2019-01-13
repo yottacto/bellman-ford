@@ -10,5 +10,6 @@ int main()
     // bf.print();
     // duration(bf.rank, [&]() { bf.compute(0, 2000000); });
     icesp::duration(bf.rank, [&]() { bf.compute<true>(0, 200000); });
+    bf.print_statistic();
 }
 

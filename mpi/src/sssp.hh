@@ -207,6 +207,8 @@ struct sssp
             std::cerr << "cross edge: " << cross_edge_count <<
                 ", max border nodes: " << max_border_node_count << "\n";
 
+        // statistic
+        last_updated.resize(n);
         dist_now.resize(n, edge::max());
         dist_pre = dist_now;
 
@@ -223,7 +225,9 @@ struct sssp
             dist_now[s] = dist_pre[s] = 0;
             pq.emplace(s, s, 0);
         }
-        auto iter = 0;
+        iter = 0;
+        // statisitc
+        updated.clear();
         for (auto relaxed = 0; ; iter++) {
             print<Enabled>("iterating on ", iter, ", ");
             print<Enabled>("relaxed ", relaxed, ", ");
@@ -291,14 +295,30 @@ struct sssp
         //     recv_buf.emplace_back(d);
         // }
 
+        auto updated_count{0};
+
         for (auto i = 0; i < n; i++) {
+            if (dist_now.at(i) != dist_pre.at(i))
+                updated_count++;
             if (dist_now.at(i) == dist_pre.at(i) || (nodes.count(i) && !border_nodes.count(i)))
                 continue;
             recv_buf.emplace_back(i);
             recv_buf.emplace_back(dist_now[i]);
         }
 
+        // statistic
+        {
+            std::vector<int> updated(size);
+            updated[rank] = updated_count;
+            MPI::COMM_WORLD.Allgather(
+                MPI::IN_PLACE, 0, MPI::DATATYPE_NULL,
+                updated.data(), 1, MPI::INT
+            );
+            this->updated.emplace_back(updated);
+        }
+
         recv_buf.resize(recv_count * 2 * size, -1);
+
 
         std::swap_ranges(
             std::begin(recv_buf),
@@ -316,7 +336,11 @@ struct sssp
             auto id = recv_buf[i];
             auto value = recv_buf[i + 1];
             if (id != -1) {
-                dist_now.at(id) = std::min(dist_now.at(id), value);
+                if (value < dist_now.at(id)) {
+                    dist_now.at(id) = value;
+                    // statistic
+                    last_updated.at(id) = iter;
+                }
                 updated++;
             }
         }
@@ -332,6 +356,39 @@ struct sssp
     {
         if (all || !rank) {
             std::cout << "n=" << n << " m=" << m << "\n";
+        }
+    }
+
+    void print_statistic()
+    {
+        if (!rank) {
+            std::cerr << "updaed per iter\n";
+            for (auto i = 0; i < iter; i++) {
+                std::cerr << "iter " << i << ": ";
+                for (auto u : updated[i])
+                    std::cerr << std::setw(7) << u << " ";
+                std::cerr << "\n";
+            }
+
+        }
+
+        std::cerr << "min/max distance per iter\n";
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, last_updated.data(), n, MPI::INT, MPI::MAX);
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist_now.data(), n, MPI::INT, MPI::MIN);
+        if (!rank) {
+            for (auto i = 0; i < iter; i++) {
+                auto min = edge::max();
+                auto max = 0;
+                for (auto u = 0; u < n; u++)
+                    if (last_updated[u] == i) {
+                        max = std::max(max, dist_now[u]);
+                        min = std::min(min, dist_now[u]);
+                    }
+                std::cerr << "iter " << i << ":"
+                    << " min=" << std::setw(7) << min
+                    << " max=" << std::setw(7) << max
+                    << "\n";
+            }
         }
     }
 
@@ -359,6 +416,11 @@ struct sssp
 
     int recv_count;
     std::vector<int> recv_buf;
+
+    // statistic
+    int iter;
+    std::vector<std::vector<int>> updated;
+    std::vector<int> last_updated;
 };
 
 } // namespace icesp
