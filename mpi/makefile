@@ -36,7 +36,7 @@ $(BUILD)/:
 $(BUILD)/src: | $(BUILD)/
 	@echo -e "$(COLOR_ACT)making directory $(COLOR_ARG)$(BUILD)/src$(COLOR_RST)..."
 	mkdir -p $(BUILD)/src
-$(BUILD)/src/main.o: src/main.cc src/sssp.hh src/timer.hh src/util.hh | $(BUILD)/src
+$(BUILD)/src/main.o: src/main.cc src/config.hh src/lib/cpptoml/cpptoml.hh src/sssp.hh src/timer.hh src/util.hh third-party/cpptoml/cpptoml.hh | $(BUILD)/src
 	@echo -e "$(COLOR_ACT)compiling $(COLOR_ARG)src/main.cc$(COLOR_RST)..."
 	$(CC) -c -o '$@' '$<' $(CCFLAGS)
 $(BIN): $(OBJECTS) | $(BUILD)/

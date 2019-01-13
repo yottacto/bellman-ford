@@ -12,6 +12,12 @@ struct timer
     using time_point_type = std::chrono::time_point<clock_type>;
     using duration_type   = std::chrono::duration<value_type>;
 
+    void restart()
+    {
+        reset();
+        start();
+    }
+
     void start()
     {
         _start = clock_type::now();

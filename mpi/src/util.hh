@@ -17,10 +17,12 @@ auto constexpr color_rst{"\e[0m"};
 auto constexpr color_act{"\e[0;32m"};
 auto constexpr color_arg{"\e[1;35m"};
 
+auto constexpr width{8};
+
 template <class T>
 void print_setw(T const& y)
 {
-    std::cerr << color_arg << std::left << std::setw(6) << y;
+    std::cerr << color_arg << std::left << std::setw(width) << y;
 };
 
 template <>
@@ -29,7 +31,7 @@ void print_setw(std::string const& y)
     if (y.empty())
         std::cerr << color_arg << y;
     else
-        std::cerr << color_arg << std::left << std::setw(6) << y;
+        std::cerr << color_arg << std::left << std::setw(width) << y;
 };
 
 template <bool Enabled>

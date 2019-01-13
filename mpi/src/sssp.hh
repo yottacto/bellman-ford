@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -11,8 +12,6 @@
 #include <mpi.h>
 #include "util.hh"
 #include "timer.hh"
-
-#include <chrono>
 
 namespace icesp
 {
@@ -46,23 +45,20 @@ struct sssp
         size = MPI::COMM_WORLD.Get_size();
 
         auto t{timer{}};
-        t.start();
+        t.restart();
         read_partition(path);
         t.stop();
         print("read partition elapsed ", t.elapsed_seconds(), "s\n");
 
-        t.reset();
-        t.start();
+        t.restart();
         read_graph(path);
         t.stop();
         print("read graph elapsed ", t.elapsed_seconds(), "s\n");
 
         recv_count = max_border_node_count + cross_edge_count;
-        if (!rank)
-            std::cerr << "recv_count=" << recv_count
-                << ", max_border_node_count=" << max_border_node_count
-                << ", cross_edge_count=" << cross_edge_count
-                << "\n";
+        print("recv_count=",            recv_count,            ", ");
+        print("max_border_node_count=", max_border_node_count, ", ");
+        print("cross_edge_count=",      cross_edge_count,      "\n");
         recv_buf.reserve(recv_count * size * 2);
     }
 
@@ -132,8 +128,8 @@ struct sssp
             bin_read(fin, &n);
             bin_read(fin, &m);
             g.resize(n);
-            if (!rank)
-                std::cerr << "n=" << n << ", m=" << m << "\n";
+            print("n=", n, ", ");
+            print("m=", m, "\n");
             int edge_count;
             bin_read(fin, &edge_count);
             for (int u, v, w; edge_count--; ) {
@@ -203,9 +199,8 @@ struct sssp
         }
 
         MPI::COMM_WORLD.Barrier();
-        if (!rank)
-            std::cerr << "cross edge: " << cross_edge_count <<
-                ", max border nodes: " << max_border_node_count << "\n";
+        print("cross_edge_count=",      cross_edge_count,      ", ");
+        print("max_border_node_count=", max_border_node_count, "\n");
 
         // statistic
         last_updated.resize(n);
@@ -225,16 +220,16 @@ struct sssp
             dist_now[s] = dist_pre[s] = 0;
             pq.emplace(s, s, 0);
         }
-        iter = 0;
+
         // statisitc
         updated.clear();
-        for (auto relaxed = 0; ; iter++) {
+        iter = 0;
+        recv_empty = false;
+        for (; !recv_empty; iter++) {
             print<Enabled>("iterating on ", iter, ", ");
-            print<Enabled>("relaxed ", relaxed, ", ");
-            relaxed = 0;
 
             auto t{timer{}};
-            t.start();
+            t.restart();
             while (!pq.empty()) {
                 auto u = pq.top().to;
                 auto dis = pq.top().cost;
@@ -247,37 +242,32 @@ struct sssp
                     if (dist_now[u] != edge::max() && dist_now[v] > dist_now[u] + c) {
                         dist_now[v] = dist_now[u] + c;
                         pq.emplace(u, v, dist_now[v]);
-                        relaxed++;
                     }
                 }
             }
             t.stop();
             print<Enabled>("dij elapsed ", t.elapsed_seconds(), "s, ");
 
-            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &relaxed, 1, MPI::INT, MPI::SUM);
-
-            if (!relaxed) {
-                print<Enabled>("\n");
-                break;
-            }
-
-            t.reset();
-            t.start();
+            t.restart();
             update_dist(dist_now, dist_pre);
-            print<Enabled>("update dist elapsed ", t.elapsed_seconds(), "s, ");
-
             for (auto u : nodes)
                 if (dist_now[u] != dist_pre[u])
                     pq.emplace(s, u, dist_now[u]);
             dist_pre = dist_now;
+            t.stop();
+            print<Enabled>("update dist elapsed ", t.elapsed_seconds(), "s, ");
+
             print<Enabled>("\n");
+
+            if (recv_empty)
+                break;
         }
 
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &dist_now[t], 1, MPI::INT, MPI::MIN);
 
-        print<Enabled>("distance from ", s, " ");
-        print<Enabled>("to ", t, " ");
-        print<Enabled>("is ", dist_now[t], "\n");
+        print<Enabled>("distance from [", s);
+        print<Enabled>("] to [", t);
+        print<Enabled>("] is ", dist_now[t], "\n");
         return dist_now[t];
     }
 
@@ -286,39 +276,22 @@ struct sssp
     {
         recv_buf.clear();
 
-        // for (auto const& p : dist_now) {
-        //     auto i = p.first;
-        //     auto d = p.second;
-        //     if (d == dist_pre.at(i) || (nodes.count(i) && !border_nodes.count(i)))
-        //         continue;
-        //     recv_buf.emplace_back(i);
-        //     recv_buf.emplace_back(d);
-        // }
-
+        // statistic
         auto updated_count{0};
-
         for (auto i = 0; i < n; i++) {
             if (dist_now.at(i) != dist_pre.at(i))
                 updated_count++;
-            if (dist_now.at(i) == dist_pre.at(i) || (nodes.count(i) && !border_nodes.count(i)))
+            else if (nodes.count(i) && !border_nodes.count(i))
                 continue;
             recv_buf.emplace_back(i);
             recv_buf.emplace_back(dist_now[i]);
         }
 
         // statistic
-        {
-            std::vector<int> updated(size);
-            updated[rank] = updated_count;
-            MPI::COMM_WORLD.Allgather(
-                MPI::IN_PLACE, 0, MPI::DATATYPE_NULL,
-                updated.data(), 1, MPI::INT
-            );
-            this->updated.emplace_back(updated);
-        }
+        updated.emplace_back(size);
+        updated.at(iter).at(rank) = updated_count;
 
         recv_buf.resize(recv_count * 2 * size, -1);
-
 
         std::swap_ranges(
             std::begin(recv_buf),
@@ -331,17 +304,17 @@ struct sssp
             recv_buf.data(), recv_count * 2, MPI::INT
         );
 
-        auto updated = 0;
+        recv_empty = true;
         for (auto i = 0u; i < recv_buf.size(); i += 2) {
             auto id = recv_buf[i];
             auto value = recv_buf[i + 1];
             if (id != -1) {
+                recv_empty = false;
                 if (value < dist_now.at(id)) {
                     dist_now.at(id) = value;
                     // statistic
                     last_updated.at(id) = iter;
                 }
-                updated++;
             }
         }
     }
@@ -361,21 +334,25 @@ struct sssp
 
     void print_statistic()
     {
-        if (!rank) {
+        if (!rank)
             std::cerr << "updaed per iter\n";
-            for (auto i = 0; i < iter; i++) {
+        for (auto i = 0; i < iter; i++) {
+            MPI::COMM_WORLD.Allgather(
+                MPI::IN_PLACE, 0, MPI::DATATYPE_NULL,
+                updated[i].data(), 1, MPI::INT
+            );
+            if (!rank) {
                 std::cerr << "iter " << i << ": ";
                 for (auto u : updated[i])
                     std::cerr << std::setw(7) << u << " ";
                 std::cerr << "\n";
             }
-
         }
 
-        std::cerr << "min/max distance per iter\n";
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, last_updated.data(), n, MPI::INT, MPI::MAX);
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist_now.data(), n, MPI::INT, MPI::MIN);
         if (!rank) {
+            std::cerr << "min/max distance per iter\n";
             for (auto i = 0; i < iter; i++) {
                 auto min = edge::max();
                 auto max = 0;
@@ -389,6 +366,16 @@ struct sssp
                     << " max=" << std::setw(7) << max
                     << "\n";
             }
+
+            auto xor_sum = 0;
+            auto unreachable = 0;
+            for (auto i = 0; i < n; i++)
+                if (dist_now[i] == edge::max())
+                    unreachable++;
+                else
+                    xor_sum ^= dist_now[i];
+            std::cerr << "\nunreachable nodes: " << unreachable << "\n";
+            std::cerr << "all distance xor: " << xor_sum << "\n\n";
         }
     }
 
@@ -416,6 +403,7 @@ struct sssp
 
     int recv_count;
     std::vector<int> recv_buf;
+    bool recv_empty;
 
     // statistic
     int iter;
