@@ -251,9 +251,10 @@ struct sssp
             t.restart();
             update_dist(dist_now, dist_pre);
             for (auto u : nodes)
-                if (dist_now[u] != dist_pre[u])
+                if (dist_now[u] != dist_pre[u]) {
                     pq.emplace(s, u, dist_now[u]);
-            dist_pre = dist_now;
+                    dist_pre[u] = dist_now[u];
+                }
             t.stop();
             print<Enabled>("update dist elapsed ", t.elapsed_seconds(), "s, ");
 
@@ -272,7 +273,7 @@ struct sssp
     }
 
     template <class T>
-    void update_dist(T& dist_now, T const& dist_pre)
+    void update_dist(T& dist_now, T& dist_pre)
     {
         recv_buf.clear();
 
@@ -281,7 +282,7 @@ struct sssp
         for (auto i = 0; i < n; i++) {
             if (dist_now.at(i) != dist_pre.at(i))
                 updated_count++;
-            else if (nodes.count(i) && !border_nodes.count(i))
+            if (dist_now.at(i) == dist_pre.at(i) || (nodes.count(i) && !border_nodes.count(i)))
                 continue;
             recv_buf.emplace_back(i);
             recv_buf.emplace_back(dist_now[i]);
@@ -310,6 +311,8 @@ struct sssp
             auto value = recv_buf[i + 1];
             if (id != -1) {
                 recv_empty = false;
+                if (!nodes.count(id))
+                    dist_pre.at(id) = std::min(dist_pre.at(id), value);
                 if (value < dist_now.at(id)) {
                     dist_now.at(id) = value;
                     // statistic
@@ -335,7 +338,7 @@ struct sssp
     void print_statistic()
     {
         if (!rank)
-            std::cerr << "updaed per iter\n";
+            std::cerr << "\nupdaed per iter\n";
         for (auto i = 0; i < iter; i++) {
             MPI::COMM_WORLD.Allgather(
                 MPI::IN_PLACE, 0, MPI::DATATYPE_NULL,

@@ -37,6 +37,7 @@ my @makefile__commands__test = (
     {
         name => '$(BIN)',
         commands => [
+            'date',
             'time -p mpirun -np 8 --oversubscribe ./$(BIN)',
         ],
     },

@@ -2,13 +2,13 @@
 policy = "deny"         # "allow" | "deny"
 selection = []
 
-[case.usa]
-path = "../dataset/USA-road-d.USA.gr"
+[case.ny]
+path = "../dataset/USA-road-d.NY.gr"
 s = 0
 t = 200000
 
-[case.ny]
-path = "../dataset/USA-road-d.NY.gr"
+[case.usa]
+path = "../dataset/USA-road-d.USA.gr"
 s = 0
 t = 200000
 
