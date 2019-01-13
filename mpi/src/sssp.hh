@@ -199,8 +199,6 @@ struct sssp
         }
 
         MPI::COMM_WORLD.Barrier();
-        print("cross_edge_count=",      cross_edge_count,      ", ");
-        print("max_border_node_count=", max_border_node_count, "\n");
 
         // statistic
         last_updated.resize(n);
@@ -223,6 +221,9 @@ struct sssp
 
         // statisitc
         updated.clear();
+        total_dij = 0.;
+        total_update = 0.;
+
         iter = 0;
         recv_empty = false;
         for (; !recv_empty; iter++) {
@@ -246,7 +247,10 @@ struct sssp
                 }
             }
             t.stop();
-            print<Enabled>("dij elapsed ", t.elapsed_seconds(), "s, ");
+            auto elapsed = t.elapsed_seconds();
+            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &elapsed, 1, MPI::DOUBLE, MPI::MAX);
+            total_dij += elapsed;
+            print<Enabled>("dij elapsed ", elapsed, "s, ");
 
             t.restart();
             update_dist(dist_now, dist_pre);
@@ -256,7 +260,10 @@ struct sssp
                     dist_pre[u] = dist_now[u];
                 }
             t.stop();
-            print<Enabled>("update dist elapsed ", t.elapsed_seconds(), "s, ");
+            elapsed = t.elapsed_seconds();
+            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &elapsed, 1, MPI::DOUBLE, MPI::MAX);
+            total_update += elapsed;
+            print<Enabled>("update dist elapsed ", elapsed, "s, ");
 
             print<Enabled>("\n");
 
@@ -379,6 +386,9 @@ struct sssp
                     xor_sum ^= dist_now[i];
             std::cerr << "\nunreachable nodes: " << unreachable << "\n";
             std::cerr << "all distance xor: " << xor_sum << "\n\n";
+
+            std::cerr << "\ntotal dij: " << total_dij << "s, "
+                << "total_update: " << total_update << "s\n";
         }
     }
 
@@ -412,6 +422,8 @@ struct sssp
     int iter;
     std::vector<std::vector<int>> updated;
     std::vector<int> last_updated;
+    double total_dij;
+    double total_update;
 };
 
 } // namespace icesp
