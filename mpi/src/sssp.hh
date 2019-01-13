@@ -9,25 +9,13 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <mpi.h>
+#include "util.hh"
+#include "timer.hh"
 
 #include <chrono>
 
 namespace icesp
 {
-
-template <class T>
-void bin_read(std::istream& i, T* x)
-{
-    i.read(reinterpret_cast<char*>(x), sizeof(*x));
-    if (!i) throw std::runtime_error{"binary read failed"};
-}
-
-template <class T>
-void bin_write(std::ostream& o, T* x)
-{
-    o.write(reinterpret_cast<char*>(x), sizeof(*x));
-    if (!o) throw std::runtime_error{"binary write failed"};
-}
 
 struct edge
 {
@@ -57,25 +45,17 @@ struct sssp
         rank = MPI::COMM_WORLD.Get_rank();
         size = MPI::COMM_WORLD.Get_size();
 
-        {
-            using namespace std::chrono;
-            auto start = high_resolution_clock::now();
-            read_partition(path);
-            auto end = high_resolution_clock::now();
-            auto elapsed = duration_cast<milliseconds>(end - start).count() / 1000.;
-            if (!rank)
-                std::cerr << "read partition elapsed <" << elapsed << "s>\n";
-        }
+        auto t{timer{}};
+        t.start();
+        read_partition(path);
+        t.stop();
+        print("read partition elapsed ", t.elapsed_seconds(), "s\n");
 
-        {
-            using namespace std::chrono;
-            auto start = high_resolution_clock::now();
-            read_graph(path);
-            auto end = high_resolution_clock::now();
-            auto elapsed = duration_cast<milliseconds>(end - start).count() / 1000.;
-            if (!rank)
-                std::cerr << "read graph elapsed <" << elapsed << "s>\n";
-        }
+        t.reset();
+        t.start();
+        read_graph(path);
+        t.stop();
+        print("read graph elapsed ", t.elapsed_seconds(), "s\n");
 
         recv_count = max_border_node_count + cross_edge_count;
         if (!rank)
@@ -115,8 +95,7 @@ struct sssp
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &has_binary, 1, MPI::BOOL, MPI::LAND);
 
         if (has_binary) {
-            if (!rank)
-                std::cerr << "reading binary graph partition file.\n";
+            print("reading binary graph partition file.\n");
             auto fin = std::ifstream{binary_file_name(path), std::ios::binary};
             int count;
             bin_read(fin, &count);
@@ -125,8 +104,7 @@ struct sssp
                 nodes.emplace(u);
             }
         } else {
-            if (!rank)
-                std::cerr << "reading normal graph partition file.\n";
+            print("reading normal graph partition file.\n");
             auto fin = std::ifstream{path};
             auto fout = std::ofstream{binary_file_name(path), std::ios::binary};
             for (int u = 0, part; fin >> part; u++)
@@ -149,8 +127,7 @@ struct sssp
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &has_binary, 1, MPI::BOOL, MPI::LAND);
 
         if (has_binary) {
-            if (!rank)
-                std::cerr << "reading binary graph file\n";
+            print("reading binary graph file\n");
             auto fin = std::ifstream{binary_file_name(path), std::ios::binary};
             bin_read(fin, &n);
             bin_read(fin, &m);
@@ -176,8 +153,7 @@ struct sssp
             bin_read(fin, &max_border_node_count);
             bin_read(fin, &cross_edge_count);
         } else {
-            if (!rank)
-                std::cerr << "reading normal graph file\n";
+            print("reading normal graph file\n");
             auto fin = std::ifstream{path};
             auto fout = std::ofstream{binary_file_name(path), std::ios::binary};
             auto edge_count = 0;
@@ -205,8 +181,7 @@ struct sssp
                     }
                 }
             }
-            if (!rank)
-                std::cerr << "writing edges\n";
+
             bin_write(fout, &edge_count);
             for (auto u = 0; u < n; u++)
                 for (auto& e : g[u]) {
@@ -214,23 +189,15 @@ struct sssp
                     bin_write(fout, &e.to);
                     bin_write(fout, &e.cost);
                 }
-            if (!rank)
-                std::cerr << "allreduce cross edge\n";
             MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &cross_edge_count, 1, MPI::INT, MPI::SUM);
             max_border_node_count = border_nodes.size();
-            if (!rank)
-                std::cerr << "allreduce max border node\n";
             MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &max_border_node_count, 1, MPI::INT, MPI::MAX);
             cross_edge_count /= 2;
 
-            if (!rank)
-                std::cerr << "writing border nodes\n";
             int border_node_count = border_nodes.size();
             bin_write(fout, &border_node_count);
             for (auto u : border_nodes)
                 bin_write(fout, &u);
-            if (!rank)
-                std::cerr << "writing max_border_node_count\n";
             bin_write(fout, &max_border_node_count);
             bin_write(fout, &cross_edge_count);
         }
@@ -246,10 +213,10 @@ struct sssp
         MPI::COMM_WORLD.Barrier();
     }
 
+    template <bool Enabled = false>
     auto compute(int s, int t)
     {
-        if (!rank)
-            std::cerr << "computing.\n";
+        print<Enabled>("computing.\n");
 
         std::priority_queue<edge> pq;
         if (nodes.count(s)) {
@@ -258,12 +225,12 @@ struct sssp
         }
         auto iter = 0;
         for (auto relaxed = 0; ; iter++) {
-            if (!rank)
-                std::cerr << "iterating on " << iter << ", relaxed=" << relaxed << ", ";
+            print<Enabled>("iterating on ", iter, ", ");
+            print<Enabled>("relaxed ", relaxed, ", ");
             relaxed = 0;
 
-            using namespace std::chrono;
-            auto start = high_resolution_clock::now();
+            auto t{timer{}};
+            t.start();
             while (!pq.empty()) {
                 auto u = pq.top().to;
                 auto dis = pq.top().cost;
@@ -280,35 +247,33 @@ struct sssp
                     }
                 }
             }
-            auto end = high_resolution_clock::now();
-            auto elapsed = duration_cast<milliseconds>(end - start).count() / 1000.;
-            if (!rank)
-                std::cerr << "dij elapsed <" << elapsed << "s>, ";
+            t.stop();
+            print<Enabled>("dij elapsed ", t.elapsed_seconds(), "s, ");
 
             MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &relaxed, 1, MPI::INT, MPI::SUM);
-            if (!relaxed)
-                break;
 
-            {
-                using namespace std::chrono;
-                auto start = high_resolution_clock::now();
-                update_dist(dist_now, dist_pre);
-                auto end = high_resolution_clock::now();
-                auto elapsed = duration_cast<milliseconds>(end - start).count() / 1000.;
-                if (!rank)
-                    std::cerr << "update dist elapsed <" << elapsed << "s>\n";
+            if (!relaxed) {
+                print<Enabled>("\n");
+                break;
             }
+
+            t.reset();
+            t.start();
+            update_dist(dist_now, dist_pre);
+            print<Enabled>("update dist elapsed ", t.elapsed_seconds(), "s, ");
 
             for (auto u : nodes)
                 if (dist_now[u] != dist_pre[u])
                     pq.emplace(s, u, dist_now[u]);
             dist_pre = dist_now;
+            print<Enabled>("\n");
         }
 
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &dist_now[t], 1, MPI::INT, MPI::MIN);
-        if (!rank)
-            std::cout << "distance from [" << s << "] to [" << t << "] is "
-                << dist_now[t] << "\n";
+
+        print<Enabled>("distance from ", s, " ");
+        print<Enabled>("to ", t, " ");
+        print<Enabled>("is ", dist_now[t], "\n");
         return dist_now[t];
     }
 
@@ -357,7 +322,13 @@ struct sssp
         }
     }
 
-    void print(bool all = false)
+    template <bool Enabled = true, class T, class U = std::string, class V = std::string>
+    void print(T const& x, U const& y = std::string{}, V const& z = std::string{}, bool all = false)
+    {
+        ::icesp::print<Enabled>(rank, x, y, z, all);
+    }
+
+    void summary(bool all = false)
     {
         if (all || !rank) {
             std::cout << "n=" << n << " m=" << m << "\n";
