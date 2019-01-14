@@ -59,6 +59,7 @@ struct sssp
         print("max_border_node_count=", max_border_node_count, ", ");
         print("cross_edge_count=",      cross_edge_count,      "\n");
         recv_buf.reserve(recv_count * size);
+        elapsed.resize(size * 2);
     }
 
     ~sssp()
@@ -200,14 +201,27 @@ struct sssp
             total_compute += compute_elapsed;
 
             if (Enabled) {
-                for (auto i = 0; i < size; i++) {
-                    if (i == rank)
-                        std::cerr << "rank: " << rank
-                            << ", compute " << std::setw(5) << compute_elapsed
-                            << ", comm " << std::setw(5) << comm_elapsed
+                elapsed[0] = compute_elapsed;
+                elapsed[1] = comm_elapsed;
+                if (!rank)
+                    MPI::COMM_WORLD.Gather(
+                        MPI::IN_PLACE, 0, MPI::DATATYPE_NULL,
+                        elapsed.data(), 2, MPI::DOUBLE,
+                        0
+                    );
+                else
+                    MPI::COMM_WORLD.Gather(
+                        elapsed.data(), 2, MPI::DOUBLE,
+                        nullptr, 0, MPI::DATATYPE_NULL,
+                        0
+                    );
+
+                if (!rank)
+                    for (auto i = 0; i < size; i++)
+                        std::cerr << "rank: " << i
+                            << ", compute " << std::setw(5) << elapsed[2 * i]
+                            << ", comm " << std::setw(5) << elapsed[2 * i + 1]
                             << std::endl;
-                    MPI::COMM_WORLD.Barrier();
-                }
             }
 
             print<Enabled>("\n");
@@ -480,6 +494,7 @@ struct sssp
     timer comm_timer;
     timer total_timer;
     int updated_count;
+    std::vector<double> elapsed;
 };
 
 } // namespace icesp
