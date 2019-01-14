@@ -7,7 +7,6 @@
 #include <limits>
 #include <vector>
 #include <queue>
-#include <unordered_set>
 #include <mpi.h>
 #include "util.hh"
 #include "timer.hh"
@@ -76,154 +75,6 @@ struct sssp
             MPI::Finalize();
     }
 
-    template <class T>
-    auto inrange(T x, T l, T r)
-    {
-        return !(x < l) && x < r;
-    }
-
-    std::string binary_file_name(std::string const& path)
-    {
-        return path + ".binary." + std::to_string(size)
-            + ".rank." + std::to_string(rank);
-    }
-
-    // TODO pass stream in parameter?
-    void read_partition(std::string const& base_path)
-    {
-        auto path = base_path + ".metis.part.8";
-        auto has_binary = std::ifstream{
-            binary_file_name(path),
-            std::ios::binary
-        }.good();
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &has_binary, 1, MPI::BOOL, MPI::LAND);
-
-        if (has_binary) {
-            print("reading binary graph partition file.\n");
-            auto fin = std::ifstream{binary_file_name(path), std::ios::binary};
-            int count;
-            bin_read(fin, &count);
-            for (int u; count--; ) {
-                bin_read(fin, &u);
-                nodes.emplace(u);
-            }
-        } else {
-            print("reading normal graph partition file.\n");
-            auto fin = std::ifstream{path};
-            auto fout = std::ofstream{binary_file_name(path), std::ios::binary};
-            for (int u = 0, part; fin >> part; u++)
-                if (part == rank)
-                    nodes.emplace(u);
-            int count = nodes.size();
-            bin_write(fout, &count);
-            for (auto u : nodes)
-                bin_write(fout, &u);
-        }
-    }
-
-    // TODO pass stream in parameter?
-    void read_graph(std::string const& path)
-    {
-        auto has_binary = std::ifstream{
-            binary_file_name(path),
-            std::ios::binary
-        }.good();
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &has_binary, 1, MPI::BOOL, MPI::LAND);
-
-        if (has_binary) {
-            print("reading binary graph file\n");
-            auto fin = std::ifstream{binary_file_name(path), std::ios::binary};
-            bin_read(fin, &n);
-            bin_read(fin, &m);
-            g.resize(n);
-            print("n=", n, ", ");
-            print("m=", m, "\n");
-            int edge_count;
-            bin_read(fin, &edge_count);
-            for (int u, v, w; edge_count--; ) {
-                bin_read(fin, &u);
-                bin_read(fin, &v);
-                bin_read(fin, &w);
-                g[u].emplace_back(u, v, w);
-                // dist_now[u] = dist_now[v] = edge::max();
-            }
-
-            int border_node_count;
-            bin_read(fin, &border_node_count);
-            for (int u; border_node_count--; ) {
-                bin_read(fin, &u);
-                border_nodes.emplace(u);
-            }
-            bin_read(fin, &max_border_node_count);
-            bin_read(fin, &cross_edge_count);
-        } else {
-            print("reading normal graph file\n");
-            auto fin = std::ifstream{path};
-            auto fout = std::ofstream{binary_file_name(path), std::ios::binary};
-            auto edge_count = 0;
-            for (char ch; fin >> ch; ) {
-                std::string buf;
-                if (ch == 'c') {
-                    std::getline(fin, buf);
-                } else if (ch == 'p') {
-                    fin >> buf >> n >> m;
-                    bin_write(fout, &n);
-                    bin_write(fout, &m);
-                    g.resize(n);
-                } else {
-                    int u, v, w;
-                    fin >> u >> v >> w;
-                    u--; v--;
-                    // dist_now[u] = dist_now[v] = edge::max();
-                    if (nodes.count(u)) {
-                        edge_count++;
-                        g[u].emplace_back(u, v, w);
-                        if (!nodes.count(v)) {
-                            border_nodes.emplace(u);
-                            cross_edge_count++;
-                        }
-                    }
-                }
-            }
-
-            bin_write(fout, &edge_count);
-            for (auto u = 0; u < n; u++)
-                for (auto& e : g[u]) {
-                    bin_write(fout, &e.from);
-                    bin_write(fout, &e.to);
-                    bin_write(fout, &e.cost);
-                }
-            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &cross_edge_count, 1, MPI::INT, MPI::SUM);
-            max_border_node_count = border_nodes.size();
-            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &max_border_node_count, 1, MPI::INT, MPI::MAX);
-            cross_edge_count /= 2;
-
-            int border_node_count = border_nodes.size();
-            bin_write(fout, &border_node_count);
-            for (auto u : border_nodes)
-                bin_write(fout, &u);
-            bin_write(fout, &max_border_node_count);
-            bin_write(fout, &cross_edge_count);
-        }
-
-        MPI::COMM_WORLD.Barrier();
-
-        // statistic
-        last_updated.resize(n);
-        dist_now.resize(n, edge::max());
-        dist_pre = dist_now;
-
-        info.resize(n);
-        for (auto u : nodes)
-            info[u].owned = true;
-        for (auto u : border_nodes)
-            info[u].boundary = true;
-        for (auto& i : info)
-            i.interior = i.owned && !i.boundary;
-
-        MPI::COMM_WORLD.Barrier();
-    }
-
     template <bool Enabled = false>
     auto compute(int s, int t)
     {
@@ -253,9 +104,12 @@ struct sssp
             print<Enabled>("iterating on ", iter, ", \n");
 
             auto updated_count{0};
+
+            total_timer.start();
+            compute_timer.restart();
+
             recv_buf.clear();
             auto len = 0;
-            compute_timer.restart();
             while (!pq.empty()) {
                 auto u = pq.top().to;
                 auto dis = pq.top().cost;
@@ -265,11 +119,10 @@ struct sssp
                 for (auto const& e : g[u]) {
                     auto v = e.to;
                     auto c = e.cost;
-                    if (dist_now[u] != edge::max() && dist_now[v] > dist_now[u] + c) {
+                    if (dist_now[v] > dist_now[u] + c) {
                         dist_now[v] = dist_now[u] + c;
                         pq.emplace(u, v, dist_now[v]);
 
-                        // TODO optimize here
                         if (!info[v].interior) {
                             if (info[v].iter == iter + 1) {
                                 recv_buf[info[v].index_in_recv_buf + 1] = dist_now[v];
@@ -293,6 +146,13 @@ struct sssp
             }
 
             update_dist(dist_now, dist_pre);
+
+            for (auto u : nodes)
+                if (dist_now[u] != dist_pre[u]) {
+                    pq.emplace(s, u, dist_now[u]);
+                    dist_pre[u] = dist_now[u];
+                }
+
             comm_timer.stop();
             total_timer.stop();
 
@@ -304,19 +164,6 @@ struct sssp
             total_compute += compute_elapsed;
 
             if (Enabled) {
-                auto source = rank - 1;
-                auto target = rank + 1;
-                if (source < 0)
-                    source = MPI::PROC_NULL;
-                if (target >= size)
-                    target = MPI::PROC_NULL;
-
-                // MPI::COMM_WORLD.Recv(nullptr, 0, MPI::BYTE, source, 0);
-                // std::cerr << "rank: " << rank
-                //     << ", compute " << std::setw(5) << compute_elapsed
-                //     << ", comm " << std::setw(5) << comm_elapsed
-                //     << std::endl;
-                // MPI::COMM_WORLD.Send(nullptr, 0, MPI::BYTE, target, 0);
                 for (auto i = 0; i < size; i++) {
                     if (i == rank)
                         std::cerr << "rank: " << rank
@@ -326,13 +173,6 @@ struct sssp
                     MPI::COMM_WORLD.Barrier();
                 }
             }
-
-            total_timer.start();
-            for (auto u : nodes)
-                if (dist_now[u] != dist_pre[u]) {
-                    pq.emplace(s, u, dist_now[u]);
-                    dist_pre[u] = dist_now[u];
-                }
 
             print<Enabled>("\n");
         }
@@ -386,6 +226,155 @@ struct sssp
         }
     }
 
+
+    template <class T>
+    auto inrange(T x, T l, T r)
+    {
+        return !(x < l) && x < r;
+    }
+
+    std::string binary_file_name(std::string const& path)
+    {
+        return path + ".binary." + std::to_string(size)
+            + ".rank." + std::to_string(rank);
+    }
+
+    void read_partition(std::string const& base_path)
+    {
+        auto path = base_path + ".metis.part.8";
+        auto has_binary = std::ifstream{
+            binary_file_name(path),
+            std::ios::binary
+        }.good();
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &has_binary, 1, MPI::BOOL, MPI::LAND);
+
+        if (has_binary) {
+            print("reading binary graph partition file.\n");
+            auto fin = std::ifstream{binary_file_name(path), std::ios::binary};
+            int count;
+            bin_read(fin, &count);
+            nodes.reserve(count);
+            for (int u; count--; ) {
+                bin_read(fin, &u);
+                nodes.emplace_back(u);
+            }
+        } else {
+            print("reading normal graph partition file.\n");
+            auto fin = std::ifstream{path};
+            auto fout = std::ofstream{binary_file_name(path), std::ios::binary};
+            for (int u = 0, part; fin >> part; u++)
+                if (part == rank)
+                    nodes.emplace_back(u);
+            int count = nodes.size();
+            bin_write(fout, &count);
+            for (auto u : nodes)
+                bin_write(fout, &u);
+        }
+    }
+
+    void read_graph(std::string const& path)
+    {
+        auto has_binary = std::ifstream{
+            binary_file_name(path),
+            std::ios::binary
+        }.good();
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &has_binary, 1, MPI::BOOL, MPI::LAND);
+
+        if (has_binary) {
+            print("reading binary graph file\n");
+            auto fin = std::ifstream{binary_file_name(path), std::ios::binary};
+            bin_read(fin, &n);
+            bin_read(fin, &m);
+            g.resize(n);
+            info.resize(n);
+            for (auto u : nodes)
+                info[u].owned = true;
+            print("n=", n, ", ");
+            print("m=", m, "\n");
+            int edge_count;
+            bin_read(fin, &edge_count);
+            for (int u, v, w; edge_count--; ) {
+                bin_read(fin, &u);
+                bin_read(fin, &v);
+                bin_read(fin, &w);
+                g[u].emplace_back(u, v, w);
+            }
+
+            int border_node_count;
+            bin_read(fin, &border_node_count);
+            for (int u; border_node_count--; ) {
+                bin_read(fin, &u);
+                border_nodes.emplace_back(u);
+            }
+            bin_read(fin, &max_border_node_count);
+            bin_read(fin, &cross_edge_count);
+        } else {
+            print("reading normal graph file\n");
+            auto fin = std::ifstream{path};
+            auto fout = std::ofstream{binary_file_name(path), std::ios::binary};
+            auto edge_count = 0;
+            for (char ch; fin >> ch; ) {
+                std::string buf;
+                if (ch == 'c') {
+                    std::getline(fin, buf);
+                } else if (ch == 'p') {
+                    fin >> buf >> n >> m;
+                    bin_write(fout, &n);
+                    bin_write(fout, &m);
+                    g.resize(n);
+                    info.resize(n);
+                    for (auto u : nodes)
+                        info[u].owned = true;
+                } else {
+                    int u, v, w;
+                    fin >> u >> v >> w;
+                    u--; v--;
+                    if (info[u].owned) {
+                        edge_count++;
+                        g[u].emplace_back(u, v, w);
+                        if (!info[v].owned) {
+                            border_nodes.emplace_back(u);
+                            cross_edge_count++;
+                        }
+                    }
+                }
+            }
+
+            bin_write(fout, &edge_count);
+            for (auto u = 0; u < n; u++)
+                for (auto& e : g[u]) {
+                    bin_write(fout, &e.from);
+                    bin_write(fout, &e.to);
+                    bin_write(fout, &e.cost);
+                }
+            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &cross_edge_count, 1, MPI::INT, MPI::SUM);
+            max_border_node_count = border_nodes.size();
+            MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &max_border_node_count, 1, MPI::INT, MPI::MAX);
+            cross_edge_count /= 2;
+
+            int border_node_count = border_nodes.size();
+            bin_write(fout, &border_node_count);
+            for (auto u : border_nodes)
+                bin_write(fout, &u);
+            bin_write(fout, &max_border_node_count);
+            bin_write(fout, &cross_edge_count);
+        }
+
+        MPI::COMM_WORLD.Barrier();
+
+        // statistic
+        last_updated.resize(n);
+        dist_now.resize(n, edge::max());
+        dist_pre = dist_now;
+
+        for (auto u : border_nodes)
+            info[u].boundary = true;
+        for (auto& i : info)
+            i.interior = i.owned && !i.boundary;
+
+        MPI::COMM_WORLD.Barrier();
+    }
+
     template <bool Enabled = true, class T, class U = std::string, class V = std::string>
     void print(T const& x, U const& y = std::string{}, V const& z = std::string{}, bool all = false)
     {
@@ -416,24 +405,26 @@ struct sssp
             }
         }
 
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, last_updated.data(), n, MPI::INT, MPI::MAX);
+        // MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, last_updated.data(), n, MPI::INT, MPI::MAX);
+        // if (!rank) {
+        //     std::cerr << "min/max distance per iter\n";
+        //     for (auto i = 0; i < iter; i++) {
+        //         auto min = edge::max();
+        //         auto max = 0;
+        //         for (auto u = 0; u < n; u++)
+        //             if (last_updated[u] == i) {
+        //                 max = std::max(max, dist_now[u]);
+        //                 min = std::min(min, dist_now[u]);
+        //             }
+        //         std::cerr << "iter " << i << ":"
+        //             << " min=" << std::setw(7) << min
+        //             << " max=" << std::setw(7) << max
+        //             << "\n";
+        //     }
+        // }
+
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist_now.data(), n, MPI::INT, MPI::MIN);
         if (!rank) {
-            std::cerr << "min/max distance per iter\n";
-            for (auto i = 0; i < iter; i++) {
-                auto min = edge::max();
-                auto max = 0;
-                for (auto u = 0; u < n; u++)
-                    if (last_updated[u] == i) {
-                        max = std::max(max, dist_now[u]);
-                        min = std::min(min, dist_now[u]);
-                    }
-                std::cerr << "iter " << i << ":"
-                    << " min=" << std::setw(7) << min
-                    << " max=" << std::setw(7) << max
-                    << "\n";
-            }
-
             auto xor_sum = 0;
             auto unreachable = 0;
             for (auto i = 0; i < n; i++)
@@ -458,8 +449,8 @@ struct sssp
     std::vector<node> info;
 
     // nodes belong to this rank
-    std::unordered_set<int> nodes;
-    std::unordered_set<int> border_nodes;
+    std::vector<int> nodes;
+    std::vector<int> border_nodes;
     int max_border_node_count;
     int cross_edge_count{0};
 
