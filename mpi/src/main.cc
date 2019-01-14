@@ -11,6 +11,8 @@ int main()
     auto t = config.front().t;
 
     icesp::sssp bf{path};
+    // warm up
+    // bf.compute<false>(s, t);
     bf.compute<true>(s, t);
     bf.print_statistic();
 }

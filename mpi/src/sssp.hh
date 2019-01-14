@@ -75,10 +75,64 @@ struct sssp
             MPI::Finalize();
     }
 
+    void compute_core()
+    {
+        recv_buf.clear();
+        auto len = 0;
+        while (!pq.empty()) {
+            auto u = pq.top().to;
+            auto dis = pq.top().cost;
+            pq.pop();
+            if (dist_now[u] < dis) continue;
+
+            for (auto const& e : g[u]) {
+                auto v = e.to;
+                auto c = e.cost;
+                if (dist_now[v] > dist_now[u] + c) {
+                    dist_now[v] = dist_now[u] + c;
+                    pq.emplace(u, v, dist_now[v]);
+
+                    if (!info[v].interior) {
+                        if (info[v].iter == iter + 1) {
+                            recv_buf[info[v].index_in_recv_buf + 1] = dist_now[v];
+                        } else {
+                            auto p = len;
+                            info[v].iter = iter + 1;
+                            info[v].index_in_recv_buf =  p;
+                            updated_count++;
+                            recv_buf.emplace_back(v);
+                            recv_buf.emplace_back(dist_now[v]);
+                            len += 2;
+                        }
+                    } else {
+                        if (info[v].iter != iter + 1) {
+                            info[v].iter = iter + 1;
+                            updated_count++;
+                        }
+                    }
+                }
+            }
+        }
+
+        update_dist(dist_now, dist_pre);
+
+        if (!recv_empty)
+            for (auto u : nodes)
+                if (dist_now[u] != dist_pre[u]) {
+                    pq.emplace(u, u, dist_now[u]);
+                    dist_pre[u] = dist_now[u];
+                }
+    }
+
     template <bool Enabled = false>
     auto compute(int s, int t)
     {
         print<Enabled>("computing.\n");
+
+        // statisitc
+        updated.clear();
+        total_compute = 0.;
+        total_comm = 0.;
 
         total_timer.restart();
         dist_now.clear();
@@ -87,75 +141,28 @@ struct sssp
         for (auto& i : info)
             i.iter = 0;
 
-        std::priority_queue<edge> pq;
+        // pq = {}; // server gcc 5.5.0 dont support
         if (info[s].owned) {
             dist_now[s] = dist_pre[s] = 0;
             pq.emplace(s, s, 0);
         }
 
-        // statisitc
-        updated.clear();
-        total_compute = 0.;
-        total_comm = 0.;
-
         iter = 0;
         recv_empty = false;
         for (; !recv_empty; iter++) {
             print<Enabled>("iterating on ", iter, ", \n");
-
-            auto updated_count{0};
+            updated_count = 0;
 
             total_timer.start();
             compute_timer.restart();
 
-            recv_buf.clear();
-            auto len = 0;
-            while (!pq.empty()) {
-                auto u = pq.top().to;
-                auto dis = pq.top().cost;
-                pq.pop();
-                if (dist_now[u] < dis) continue;
-
-                for (auto const& e : g[u]) {
-                    auto v = e.to;
-                    auto c = e.cost;
-                    if (dist_now[v] > dist_now[u] + c) {
-                        dist_now[v] = dist_now[u] + c;
-                        pq.emplace(u, v, dist_now[v]);
-
-                        if (!info[v].interior) {
-                            if (info[v].iter == iter + 1) {
-                                recv_buf[info[v].index_in_recv_buf + 1] = dist_now[v];
-                            } else {
-                                auto p = len;
-                                info[v].iter = iter + 1;
-                                info[v].index_in_recv_buf =  p;
-                                updated_count++;
-                                recv_buf.emplace_back(v);
-                                recv_buf.emplace_back(dist_now[v]);
-                                len += 2;
-                            }
-                        } else {
-                            if (info[v].iter != iter + 1) {
-                                info[v].iter = iter + 1;
-                                updated_count++;
-                            }
-                        }
-                    }
-                }
-            }
-
-            update_dist(dist_now, dist_pre);
-
-            for (auto u : nodes)
-                if (dist_now[u] != dist_pre[u]) {
-                    pq.emplace(s, u, dist_now[u]);
-                    dist_pre[u] = dist_now[u];
-                }
+            compute_core();
 
             comm_timer.stop();
             total_timer.stop();
 
+
+            // statistic
             updated.emplace_back(size);
             updated.at(iter).at(rank) = updated_count;
             auto comm_elapsed = comm_timer.elapsed_seconds();
@@ -454,6 +461,7 @@ struct sssp
     int max_border_node_count;
     int cross_edge_count{0};
 
+    std::priority_queue<edge> pq;
     std::vector<int> dist_now;
     std::vector<int> dist_pre;
 
@@ -470,6 +478,7 @@ struct sssp
     timer compute_timer;
     timer comm_timer;
     timer total_timer;
+    int updated_count;
 };
 
 } // namespace icesp
