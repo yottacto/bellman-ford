@@ -19,6 +19,7 @@ struct node
     bool owned{};
     bool boundary{};
     bool interior{};
+    bool updated{};
     int iter{};
     int index_in_recv_buf{};
 };
@@ -66,8 +67,7 @@ struct sssp
             MPI::Finalize();
     }
 
-    template <class T>
-    void update_dist(T& dist_now, T& dist_pre)
+    void update_dist()
     {
         recv_buf.resize(recv_count * size, -1);
 
@@ -87,16 +87,16 @@ struct sssp
 
         recv_empty = true;
         for (auto i = 0u; i < recv_buf.size(); i += 2) {
-            auto id = recv_buf[i];
+            auto u = recv_buf[i];
             auto value = recv_buf[i + 1];
-            if (id != -1) {
+            if (u != -1) {
                 recv_empty = false;
-                if (!info[id].owned)
-                    dist_pre.at(id) = std::min(dist_pre.at(id), value);
-                if (value < dist_now.at(id)) {
-                    dist_now.at(id) = value;
+                if (value < dist.at(u)) {
+                    dist.at(u) = value;
+                    if (info[u].boundary)
+                        info[u].updated = true;
                     // statistic
-                    last_updated.at(id) = iter;
+                    last_updated.at(u) = iter;
                 }
             }
         }
@@ -110,45 +110,49 @@ struct sssp
             auto u = pq.top().to;
             auto dis = pq.top().cost;
             pq.pop();
-            if (dist_now[u] < dis) continue;
+            if (dist[u] < dis)
+                continue;
 
             for (auto const& e : g[u]) {
                 auto v = e.to;
                 auto c = e.cost;
-                if (dist_now[v] > dist_now[u] + c) {
-                    dist_now[v] = dist_now[u] + c;
-                    pq.emplace(v, dist_now[v]);
+                if (dist[v] <= dist[u] + c)
+                    continue;
+                dist[v] = dist[u] + c;
+                pq.emplace(v, dist[v]);
 
-                    if (!info[v].interior) {
-                        if (info[v].iter == iter + 1) {
-                            recv_buf[info[v].index_in_recv_buf + 1] = dist_now[v];
-                        } else {
-                            auto p = len;
-                            info[v].iter = iter + 1;
-                            info[v].index_in_recv_buf =  p;
-                            updated_count++;
-                            recv_buf.emplace_back(v);
-                            recv_buf.emplace_back(dist_now[v]);
-                            len += 2;
-                        }
+                if (!info[v].interior) {
+                    if (info[v].iter == iter + 1) {
+                        recv_buf[info[v].index_in_recv_buf + 1] = dist[v];
+                        if (info[v].boundary)
+                            info[v].updated = true;
                     } else {
-                        if (info[v].iter != iter + 1) {
-                            info[v].iter = iter + 1;
-                            updated_count++;
-                        }
+                        auto p = len;
+                        info[v].iter = iter + 1;
+                        info[v].index_in_recv_buf =  p;
+                        updated_count++;
+                        recv_buf.emplace_back(v);
+                        recv_buf.emplace_back(dist[v]);
+                        len += 2;
+                    }
+                } else {
+                    if (info[v].iter != iter + 1) {
+                        info[v].iter = iter + 1;
+                        updated_count++;
                     }
                 }
             }
         }
 
-        update_dist(dist_now, dist_pre);
+        update_dist();
 
-        if (!recv_empty)
-            for (auto u : nodes)
-                if (dist_now[u] != dist_pre[u]) {
-                    pq.emplace(u, dist_now[u]);
-                    dist_pre[u] = dist_now[u];
-                }
+        if (recv_empty)
+            return;
+        for (auto u : nodes)
+            if (info[u].updated) {
+                pq.emplace(u, dist[u]);
+                info[u].updated = false;
+            }
     }
 
     template <bool Enabled = false>
@@ -158,19 +162,17 @@ struct sssp
 
         // statisitc
         updated.clear();
-        total_compute = 0.;
-        total_comm = 0.;
+        total_compute = total_comm = 0.;
 
         total_timer.restart();
-        dist_now.clear();
-        dist_now.resize(n, edge::max());
-        dist_pre = dist_now;
+        dist.clear();
+        dist.resize(n, edge::max());
         for (auto& i : info)
-            i.iter = 0;
+            i.iter = i.updated = false;
 
         // pq = {}; // server gcc 5.5.0 dont support
         if (info[s].owned) {
-            dist_now[s] = dist_pre[s] = 0;
+            dist[s] = 0;
             pq.emplace(s, 0);
         }
 
@@ -212,16 +214,16 @@ struct sssp
         }
 
         total_timer.stop();
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &dist_now[t], 1, MPI::INT, MPI::MIN);
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &dist[t], 1, MPI::INT, MPI::MIN);
 
         print<Enabled>("distance from [", s);
         print<Enabled>("] to [", t);
-        print<Enabled>("] is ", dist_now[t], "\n");
+        print<Enabled>("] is ", dist[t], "\n");
 
         print<Enabled>("total compute elapsed ", total_compute, ", ");
         print<Enabled>("total comm elapsed ", total_comm, "\n");
         print<Enabled>("total time elapsed ", total_timer.elapsed_seconds(), "\n");
-        return dist_now[t];
+        return dist[t];
     }
 
     template <class T>
@@ -369,8 +371,7 @@ struct sssp
 
         // statistic
         last_updated.resize(n);
-        dist_now.resize(n, edge::max());
-        dist_pre = dist_now;
+        dist.resize(n, edge::max());
 
         for (auto u : border_nodes)
             info[u].boundary = true;
@@ -421,8 +422,8 @@ struct sssp
         //         auto max = 0;
         //         for (auto u = 0; u < n; u++)
         //             if (last_updated[u] == i) {
-        //                 max = std::max(max, dist_now[u]);
-        //                 min = std::min(min, dist_now[u]);
+        //                 max = std::max(max, dist[u]);
+        //                 min = std::min(min, dist[u]);
         //             }
         //         std::cerr << "iter " << i << ":"
         //             << " min=" << std::setw(7) << min
@@ -431,15 +432,15 @@ struct sssp
         //     }
         // }
 
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist_now.data(), n, MPI::INT, MPI::MIN);
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist.data(), n, MPI::INT, MPI::MIN);
         if (!rank) {
             auto xor_sum = 0;
             auto unreachable = 0;
             for (auto i = 0; i < n; i++)
-                if (dist_now[i] == edge::max())
+                if (dist[i] == edge::max())
                     unreachable++;
                 else
-                    xor_sum ^= dist_now[i];
+                    xor_sum ^= dist[i];
             std::cerr << "\nunreachable nodes: " << unreachable << "\n";
             std::cerr << "all distance xor: " << xor_sum << "\n\n";
         }
@@ -463,8 +464,7 @@ struct sssp
     int cross_edge_count{0};
 
     std::priority_queue<edge> pq;
-    std::vector<int> dist_now;
-    std::vector<int> dist_pre;
+    std::vector<int> dist;
 
     int recv_count;
     std::vector<int> recv_buf;
