@@ -6,7 +6,7 @@
 #include <iterator>
 #include <limits>
 #include <vector>
-#include <queue>
+#include <deque>
 #include <mpi.h>
 #include "util.hh"
 #include "timer.hh"
@@ -20,6 +20,7 @@ struct node
     bool boundary{};
     bool interior{};
     bool updated{};
+    bool inqueue{};
     int iter{};
     int index_in_recv_buf{};
 };
@@ -108,19 +109,23 @@ struct sssp
     {
         recv_buf.clear();
         auto len = 0;
-        while (!pq.empty()) {
-            auto u = pq.top().to;
-            auto dis = pq.top().cost;
-            pq.pop();
-            if (dist[u] < dis)
-                continue;
+        while (!dq.empty()) {
+            auto u = dq.front();
+            info[u].inqueue = false;
+            dq.pop_front();
 
             for (auto const& e : g[u]) {
                 auto v = e.to;
                 if (dist[v] <= dist[u] + e.cost)
                     continue;
                 dist[v] = dist[u] + e.cost;
-                pq.emplace(v, dist[v]);
+                if (!info[v].inqueue) {
+                    info[v].inqueue = true;
+                    if (!dq.empty() && dist[v] <= dist[dq.front()])
+                        dq.emplace_front(v);
+                    else
+                        dq.emplace_back(v);
+                }
 
                 // packing message and update statistic
                 if (!info[v].interior) {
@@ -148,7 +153,7 @@ struct sssp
         for (auto u : boundary_nodes)
             if (info[u].updated) {
                 info[u].updated = false;
-                pq.emplace(u, dist[u]);
+                dq.emplace_back(u);
             }
     }
 
@@ -170,7 +175,8 @@ struct sssp
         // pq = {}; // server gcc 5.5.0 dont support
         if (info[s].owned) {
             dist[s] = 0;
-            pq.emplace(s, 0);
+            info[s].inqueue = true;
+            dq.emplace_back(s);
         }
 
         iter = 0;
@@ -487,7 +493,7 @@ struct sssp
     int cross_edge_count{};
 
     int iter;
-    std::priority_queue<edge> pq;
+    std::deque<int> dq;
     std::vector<int> dist;
 
     int recv_count;
