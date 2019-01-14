@@ -25,14 +25,13 @@ struct node
 
 struct edge
 {
-    edge(int from, int to, int cost) : from(from), to(to), cost(cost) {}
+    edge(int to, int cost) : to(to), cost(cost) {}
 
     static auto constexpr max() noexcept
     {
         return std::numeric_limits<int>::max();
     }
 
-    int from;
     int to;
     int cost;
 };
@@ -51,28 +50,56 @@ struct sssp
         rank = MPI::COMM_WORLD.Get_rank();
         size = MPI::COMM_WORLD.Get_size();
 
-        auto t{timer{}};
-        t.restart();
         read_partition(path);
-        t.stop();
-        print("read partition elapsed ", t.elapsed_seconds(), "s\n");
-
-        t.restart();
         read_graph(path);
-        t.stop();
-        print("read graph elapsed ", t.elapsed_seconds(), "s\n");
 
-        recv_count = max_border_node_count + cross_edge_count;
+        recv_count = 2 * (max_border_node_count + cross_edge_count);
         print("recv_count=",            recv_count,            ", ");
         print("max_border_node_count=", max_border_node_count, ", ");
         print("cross_edge_count=",      cross_edge_count,      "\n");
-        recv_buf.reserve(recv_count * size * 2);
+        recv_buf.reserve(recv_count * size);
     }
 
     ~sssp()
     {
         if (!MPI::Is_finalized())
             MPI::Finalize();
+    }
+
+    template <class T>
+    void update_dist(T& dist_now, T& dist_pre)
+    {
+        recv_buf.resize(recv_count * size, -1);
+
+        std::swap_ranges(
+            std::begin(recv_buf),
+            std::next(std::begin(recv_buf), recv_count),
+            std::next(std::begin(recv_buf), recv_count * rank)
+        );
+
+        compute_timer.stop();
+        comm_timer.restart();
+
+        MPI::COMM_WORLD.Allgather(
+            MPI::IN_PLACE, 0, MPI::DATATYPE_NULL,
+            recv_buf.data(), recv_count, MPI::INT
+        );
+
+        recv_empty = true;
+        for (auto i = 0u; i < recv_buf.size(); i += 2) {
+            auto id = recv_buf[i];
+            auto value = recv_buf[i + 1];
+            if (id != -1) {
+                recv_empty = false;
+                if (!info[id].owned)
+                    dist_pre.at(id) = std::min(dist_pre.at(id), value);
+                if (value < dist_now.at(id)) {
+                    dist_now.at(id) = value;
+                    // statistic
+                    last_updated.at(id) = iter;
+                }
+            }
+        }
     }
 
     void compute_core()
@@ -90,7 +117,7 @@ struct sssp
                 auto c = e.cost;
                 if (dist_now[v] > dist_now[u] + c) {
                     dist_now[v] = dist_now[u] + c;
-                    pq.emplace(u, v, dist_now[v]);
+                    pq.emplace(v, dist_now[v]);
 
                     if (!info[v].interior) {
                         if (info[v].iter == iter + 1) {
@@ -119,7 +146,7 @@ struct sssp
         if (!recv_empty)
             for (auto u : nodes)
                 if (dist_now[u] != dist_pre[u]) {
-                    pq.emplace(u, u, dist_now[u]);
+                    pq.emplace(u, dist_now[u]);
                     dist_pre[u] = dist_now[u];
                 }
     }
@@ -144,7 +171,7 @@ struct sssp
         // pq = {}; // server gcc 5.5.0 dont support
         if (info[s].owned) {
             dist_now[s] = dist_pre[s] = 0;
-            pq.emplace(s, s, 0);
+            pq.emplace(s, 0);
         }
 
         iter = 0;
@@ -198,43 +225,6 @@ struct sssp
     }
 
     template <class T>
-    void update_dist(T& dist_now, T& dist_pre)
-    {
-        recv_buf.resize(recv_count * 2 * size, -1);
-
-        std::swap_ranges(
-            std::begin(recv_buf),
-            std::next(std::begin(recv_buf), recv_count * 2),
-            std::next(std::begin(recv_buf), recv_count * 2 * rank)
-        );
-
-        compute_timer.stop();
-        comm_timer.restart();
-
-        MPI::COMM_WORLD.Allgather(
-            MPI::IN_PLACE, 0, MPI::DATATYPE_NULL,
-            recv_buf.data(), recv_count * 2, MPI::INT
-        );
-
-        recv_empty = true;
-        for (auto i = 0u; i < recv_buf.size(); i += 2) {
-            auto id = recv_buf[i];
-            auto value = recv_buf[i + 1];
-            if (id != -1) {
-                recv_empty = false;
-                if (!info[id].owned)
-                    dist_pre.at(id) = std::min(dist_pre.at(id), value);
-                if (value < dist_now.at(id)) {
-                    dist_now.at(id) = value;
-                    // statistic
-                    last_updated.at(id) = iter;
-                }
-            }
-        }
-    }
-
-
-    template <class T>
     auto inrange(T x, T l, T r)
     {
         return !(x < l) && x < r;
@@ -248,6 +238,9 @@ struct sssp
 
     void read_partition(std::string const& base_path)
     {
+        auto t{timer{}};
+        t.restart();
+
         auto path = base_path + ".metis.part.8";
         auto has_binary = std::ifstream{
             binary_file_name(path),
@@ -277,10 +270,15 @@ struct sssp
             for (auto u : nodes)
                 bin_write(fout, &u);
         }
+
+        t.stop();
+        print("read partition elapsed ", t.elapsed_seconds(), "s\n");
     }
 
     void read_graph(std::string const& path)
     {
+        auto t{timer{}};
+        t.restart();
         auto has_binary = std::ifstream{
             binary_file_name(path),
             std::ios::binary
@@ -304,7 +302,7 @@ struct sssp
                 bin_read(fin, &u);
                 bin_read(fin, &v);
                 bin_read(fin, &w);
-                g[u].emplace_back(u, v, w);
+                g[u].emplace_back(v, w);
             }
 
             int border_node_count;
@@ -338,7 +336,7 @@ struct sssp
                     u--; v--;
                     if (info[u].owned) {
                         edge_count++;
-                        g[u].emplace_back(u, v, w);
+                        g[u].emplace_back(v, w);
                         if (!info[v].owned) {
                             border_nodes.emplace_back(u);
                             cross_edge_count++;
@@ -350,7 +348,7 @@ struct sssp
             bin_write(fout, &edge_count);
             for (auto u = 0; u < n; u++)
                 for (auto& e : g[u]) {
-                    bin_write(fout, &e.from);
+                    bin_write(fout, &u);
                     bin_write(fout, &e.to);
                     bin_write(fout, &e.cost);
                 }
@@ -380,6 +378,9 @@ struct sssp
             i.interior = i.owned && !i.boundary;
 
         MPI::COMM_WORLD.Barrier();
+
+        t.stop();
+        print("read graph elapsed ", t.elapsed_seconds(), "s\n");
     }
 
     template <bool Enabled = true, class T, class U = std::string, class V = std::string>
