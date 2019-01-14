@@ -20,7 +20,9 @@ struct timer
 
     void start()
     {
+        if (started) return;
         _start = clock_type::now();
+        started = true;
     }
 
     void stop()
@@ -29,11 +31,13 @@ struct timer
         end = clock_type::now();
         auto elapsed = duration_cast<milliseconds>(end - _start).count() / 1000.;
         tot += elapsed;
+        started = false;
     }
 
     void reset()
     {
         tot = 0;
+        started = false;
     }
 
     auto elapsed_seconds() const
@@ -45,6 +49,7 @@ private:
     time_point_type _start;
     time_point_type end;
     value_type tot;
+    bool started{};
 };
 
 } // namespace icesp
