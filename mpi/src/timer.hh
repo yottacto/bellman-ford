@@ -48,7 +48,7 @@ struct timer
 private:
     time_point_type _start;
     time_point_type end;
-    value_type tot;
+    value_type tot{};
     bool started{};
 };
 
