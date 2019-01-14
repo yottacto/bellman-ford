@@ -59,6 +59,7 @@ struct sssp
         print("max_border_node_count=", max_border_node_count, ", ");
         print("cross_edge_count=",      cross_edge_count,      "\n");
         recv_buf.reserve(recv_count * size);
+        // statistic
         elapsed.resize(size * 2);
     }
 
@@ -191,7 +192,6 @@ struct sssp
             comm_timer.stop();
             total_timer.stop();
 
-
             // statistic
             updated.emplace_back(size);
             updated.at(iter).at(rank) = updated_count;
@@ -312,17 +312,22 @@ struct sssp
                 info[u].owned = true;
             print("n=", n, ", ");
             print("m=", m, "\n");
-            int edge_count;
-            bin_read(fin, &edge_count);
-            for (int u, v, w; edge_count--; ) {
+            int node_count;
+            bin_read(fin, &node_count);
+            for (int u, size; node_count--; ) {
                 bin_read(fin, &u);
-                bin_read(fin, &v);
-                bin_read(fin, &w);
-                g[u].emplace_back(v, w);
+                bin_read(fin, &size);
+                g[u].reserve(size);
+                for (int v, w; size--; ) {
+                    bin_read(fin, &v);
+                    bin_read(fin, &w);
+                    g[u].emplace_back(v, w);
+                }
             }
 
             int border_node_count;
             bin_read(fin, &border_node_count);
+            border_nodes.reserve(border_node_count);
             for (int u; border_node_count--; ) {
                 bin_read(fin, &u);
                 border_nodes.emplace_back(u);
@@ -333,7 +338,6 @@ struct sssp
             print("reading normal graph file\n");
             auto fin = std::ifstream{path};
             auto fout = std::ofstream{binary_file_name(path), std::ios::binary};
-            auto edge_count = 0;
             for (char ch; fin >> ch; ) {
                 std::string buf;
                 if (ch == 'c') {
@@ -351,7 +355,6 @@ struct sssp
                     fin >> u >> v >> w;
                     u--; v--;
                     if (info[u].owned) {
-                        edge_count++;
                         g[u].emplace_back(v, w);
                         if (!info[v].owned) {
                             border_nodes.emplace_back(u);
@@ -361,13 +364,22 @@ struct sssp
                 }
             }
 
-            bin_write(fout, &edge_count);
+            auto node_count = 0;
             for (auto u = 0; u < n; u++)
+                if (!g[u].empty())
+                    node_count++;
+            bin_write(fout, &node_count);
+            for (auto u = 0; u < n; u++) {
+                if (g[u].empty())
+                    continue;
+                bin_write(fout, &u);
+                int size = g[u].size();
+                bin_write(fout, &size);
                 for (auto& e : g[u]) {
-                    bin_write(fout, &u);
                     bin_write(fout, &e.to);
                     bin_write(fout, &e.cost);
                 }
+            }
             MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &cross_edge_count, 1, MPI::INT, MPI::SUM);
             max_border_node_count = border_nodes.size();
             MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &max_border_node_count, 1, MPI::INT, MPI::MAX);
