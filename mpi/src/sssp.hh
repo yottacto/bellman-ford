@@ -8,13 +8,21 @@
 #include <vector>
 #include <queue>
 #include <unordered_set>
-#include <unordered_map>
 #include <mpi.h>
 #include "util.hh"
 #include "timer.hh"
 
 namespace icesp
 {
+
+struct node
+{
+    bool owned{};
+    bool boundary{};
+    bool interior{};
+    int iter{};
+    int index_in_recv_buf{};
+};
 
 struct edge
 {
@@ -204,7 +212,14 @@ struct sssp
         last_updated.resize(n);
         dist_now.resize(n, edge::max());
         dist_pre = dist_now;
-        pos.resize(n);
+
+        info.resize(n);
+        for (auto u : nodes)
+            info[u].owned = true;
+        for (auto u : border_nodes)
+            info[u].boundary = true;
+        for (auto& i : info)
+            i.interior = i.owned && !i.boundary;
 
         MPI::COMM_WORLD.Barrier();
     }
@@ -218,11 +233,11 @@ struct sssp
         dist_now.clear();
         dist_now.resize(n, edge::max());
         dist_pre = dist_now;
-        pos.clear();
-        pos.resize(n);
+        for (auto& i : info)
+            i.iter = 0;
 
         std::priority_queue<edge> pq;
-        if (nodes.count(s)) {
+        if (info[s].owned) {
             dist_now[s] = dist_pre[s] = 0;
             pq.emplace(s, s, 0);
         }
@@ -255,20 +270,21 @@ struct sssp
                         pq.emplace(u, v, dist_now[v]);
 
                         // TODO optimize here
-                        if (!nodes.count(v) || border_nodes.count(v)) {
-                            if (pos[v].first == iter + 1) {
-                                recv_buf[pos[v].second + 1] = dist_now[v];
+                        if (!info[v].interior) {
+                            if (info[v].iter == iter + 1) {
+                                recv_buf[info[v].index_in_recv_buf + 1] = dist_now[v];
                             } else {
                                 auto p = len;
-                                pos[v] = {iter + 1, p};
+                                info[v].iter = iter + 1;
+                                info[v].index_in_recv_buf =  p;
                                 updated_count++;
                                 recv_buf.emplace_back(v);
                                 recv_buf.emplace_back(dist_now[v]);
                                 len += 2;
                             }
                         } else {
-                            if (pos[v].first != iter + 1) {
-                                pos[v].first = iter + 1;
+                            if (info[v].iter != iter + 1) {
+                                info[v].iter = iter + 1;
                                 updated_count++;
                             }
                         }
@@ -295,12 +311,20 @@ struct sssp
                 if (target >= size)
                     target = MPI::PROC_NULL;
 
-                MPI::COMM_WORLD.Recv(nullptr, 0, MPI::BYTE, source, 0);
-                std::cerr << "rank: " << rank
-                    << ", compute " << std::setw(5) << compute_elapsed
-                    << ", comm " << std::setw(5) << comm_elapsed
-                    << std::endl;
-                MPI::COMM_WORLD.Send(nullptr, 0, MPI::BYTE, target, 0);
+                // MPI::COMM_WORLD.Recv(nullptr, 0, MPI::BYTE, source, 0);
+                // std::cerr << "rank: " << rank
+                //     << ", compute " << std::setw(5) << compute_elapsed
+                //     << ", comm " << std::setw(5) << comm_elapsed
+                //     << std::endl;
+                // MPI::COMM_WORLD.Send(nullptr, 0, MPI::BYTE, target, 0);
+                for (auto i = 0; i < size; i++) {
+                    if (i == rank)
+                        std::cerr << "rank: " << rank
+                            << ", compute " << std::setw(5) << compute_elapsed
+                            << ", comm " << std::setw(5) << comm_elapsed
+                            << std::endl;
+                    MPI::COMM_WORLD.Barrier();
+                }
             }
 
             total_timer.start();
@@ -351,7 +375,7 @@ struct sssp
             auto value = recv_buf[i + 1];
             if (id != -1) {
                 recv_empty = false;
-                if (!nodes.count(id))
+                if (!info[id].owned)
                     dist_pre.at(id) = std::min(dist_pre.at(id), value);
                 if (value < dist_now.at(id)) {
                     dist_now.at(id) = value;
@@ -431,8 +455,7 @@ struct sssp
     // total number of edges
     int m;
     std::vector<std::vector<edge>> g;
-    std::vector<std::pair<int, int>> pos;
-    // std::unordered_map<int, std::vector<edge>> g;
+    std::vector<node> info;
 
     // nodes belong to this rank
     std::unordered_set<int> nodes;
@@ -442,8 +465,6 @@ struct sssp
 
     std::vector<int> dist_now;
     std::vector<int> dist_pre;
-    // std::unordered_map<int, int> dist_now;
-    // std::unordered_map<int, int> dist_pre;
 
     int recv_count;
     std::vector<int> recv_buf;
