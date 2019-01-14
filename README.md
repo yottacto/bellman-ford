@@ -1,4 +1,4 @@
-# Parallel Implementation of Bellman-Ford Algorithm
+# Parallel Implementation of SSSP Algorithm
 
 ## MPI
 
