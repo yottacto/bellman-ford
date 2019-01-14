@@ -227,16 +227,18 @@ struct sssp
             print<Enabled>("\n");
         }
 
-        total_timer.stop();
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &dist[t], 1, MPI::INT, MPI::MIN);
-
         print<Enabled>("distance from [", s);
         print<Enabled>("] to [", t);
         print<Enabled>("] is ", dist[t], "\n");
 
+        auto total = total_timer.elapsed_seconds();
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total_compute, 1, MPI::DOUBLE, MPI::MAX);
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total_comm,    1, MPI::DOUBLE, MPI::MAX);
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total,         1, MPI::DOUBLE, MPI::MAX);
         print<Enabled>("total compute elapsed ", total_compute, ", ");
         print<Enabled>("total comm elapsed ", total_comm, "\n");
-        print<Enabled>("total time elapsed ", total_timer.elapsed_seconds(), "\n");
+        print<Enabled>("total time elapsed ", total, "\n");
         return dist[t];
     }
 
