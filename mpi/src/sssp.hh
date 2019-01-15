@@ -20,6 +20,7 @@ struct node
     bool boundary{};
     bool interior{};
     bool updated{};
+    bool inqueue{};
     int iter{};
     int index_in_recv_buf{};
 };
@@ -110,17 +111,18 @@ struct sssp
         auto len = 0;
         while (!pq.empty()) {
             auto u = pq.top().to;
-            auto dis = pq.top().cost;
+            info[u].inqueue = false;
             pq.pop();
-            if (dist[u] < dis)
-                continue;
 
             for (auto const& e : g[u]) {
                 auto v = e.to;
                 if (dist[v] <= dist[u] + e.cost)
                     continue;
                 dist[v] = dist[u] + e.cost;
-                pq.emplace(v, dist[v]);
+                if (!info[v].inqueue) {
+                    info[v].inqueue = true;
+                    pq.emplace(v, dist[v]);
+                }
 
                 // packing message and update statistic
                 if (!info[v].interior) {
@@ -148,6 +150,7 @@ struct sssp
         for (auto u : boundary_nodes)
             if (info[u].updated) {
                 info[u].updated = false;
+                info[u].inqueue = true;
                 pq.emplace(u, dist[u]);
             }
     }
@@ -165,7 +168,7 @@ struct sssp
         dist.clear();
         dist.resize(n, edge::max());
         for (auto& i : info)
-            i.iter = i.updated = false;
+            i.iter = 0;
 
         // pq = {}; // server gcc 5.5.0 dont support
         if (info[s].owned) {
@@ -401,6 +404,10 @@ struct sssp
         for (auto& i : info)
             i.interior = i.owned && !i.boundary;
 
+        for (auto i = 0; i < n; i++)
+            if (!info[i].interior)
+                non_interior_nodes.emplace_back(i);
+
         MPI::COMM_WORLD.Barrier();
 
         t.stop();
@@ -483,6 +490,7 @@ struct sssp
     // nodes belong to this rank
     std::vector<int> nodes;
     std::vector<int> boundary_nodes;
+    std::vector<int> non_interior_nodes;
     int max_boundary_node_count;
     int cross_edge_count{};
 
