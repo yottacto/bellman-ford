@@ -1,0 +1,36 @@
+:toc:
+
+= Results of SSSP
+
+== Environment
+
+.ipe cluster
+* CPU: Intel(R) Xeon(R) CPU E5-2680 v4 (56) @ 2.40GHz
+* Memory: 125.925G
+
+.software
+* MPI: Open MPI 3.0.0
+* Compiler: gcc version 5.5.0
+* Graph Partition: metis 5.1.0 (using default parameter)
+
+== Dataset
+
+9th DIMACS Implementation Challenge - Shortest Paths, Full USA road networks
+with `23,947,347` nodes and `58,333,344` arcs.
+
+== Results
+
+time in seconds
+[cols="^.^1, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2", options="header"]
+|====
+
+| number of host / graph partition | convergence round | total time | total communication time | total computation time
+| 4                                | 7                 | 3.184      | 2.303                    | 0.892
+| 8                                | 17                | 1.799      | 1.303                    | 1.041
+| 12                               | 18                | 2.719      | 2.336                    | 1.070
+| 16                               | 17                | 2.308      | 2.002                    | 1.057
+| 20                               | 21                | 1.969      | 1.748                    | 0.966
+| 24                               |                   |            |                          |
+
+|====
+
