@@ -21,7 +21,7 @@ with `23,947,347` nodes and `58,333,344` arcs.
 == Results
 
 time in seconds
-[cols="^.^1, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2, ^.^2", options="header"]
+[cols="^.^4, ^.^3, ^.^3, ^.^4, ^.^3", options="header"]
 |====
 
 | number of host / graph partition | convergence round | total time | total communication time | total computation time
@@ -30,7 +30,7 @@ time in seconds
 | 12                               | 18                | 2.719      | 2.336                    | 1.070
 | 16                               | 17                | 2.308      | 2.002                    | 1.057
 | 20                               | 21                | 1.969      | 1.748                    | 0.966
-| 24                               |                   |            |                          |
+| 24                               | 16                | 2.203      | 2.018                    | 0.985
 
 |====
 
