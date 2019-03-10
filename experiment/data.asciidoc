@@ -20,17 +20,28 @@ with `23,947,347` nodes and `58,333,344` arcs.
 
 == Results
 
-time in seconds
+All time are in seconds.
+
+=== random partition
+
+It takes too long to converge. e.g. the convergence round of 4 hosts is far
+more than 2000.
+
+=== continuous partition
+
+
+=== metis partition
+
 [cols="^.^4, ^.^3, ^.^3, ^.^4, ^.^3", options="header"]
 |====
 
 | number of host / graph partition | convergence round | total time | total communication time | total computation time
-| 4                                | 7                 | 3.184      | 2.303                    | 0.892
-| 8                                | 17                | 1.799      | 1.303                    | 1.041
-| 12                               | 18                | 2.719      | 2.336                    | 1.070
-| 16                               | 17                | 2.308      | 2.002                    | 1.057
-| 20                               | 21                | 1.969      | 1.748                    | 0.966
-| 24                               | 16                | 2.203      | 2.018                    | 0.985
+| 4                                | 7                 | 3.24       | 0.003                    | 3.18
+| 8                                | 17                | 1.784      | 0.027                    | 1.7
+| 12                               | 18                | 2.055      | 0.014                    | 1.983
+| 16                               | 17                | 1.823      | 0.045                    | 1.721
+| 20                               | 21                | 1.474      | 0.032                    | 1.386
+| 24                               | 16                | 1.93       | 0.033                    | 1.844
 
 |====
 
