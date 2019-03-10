@@ -195,8 +195,8 @@ struct sssp
             updated[iter][rank] = updated_count;
             auto comm_elapsed = comm_timer.elapsed_seconds();
             auto compute_elapsed = compute_timer.elapsed_seconds();
-            total_comm += comm_elapsed;
-            total_compute += compute_elapsed;
+            // total_comm += comm_elapsed;
+            // total_compute += compute_elapsed;
 
             if (Enabled) {
                 elapsed[0] = compute_elapsed;
@@ -214,12 +214,24 @@ struct sssp
                         0
                     );
 
-                if (!rank)
-                    for (auto i = 0; i < size; i++)
+                if (!rank) {
+                    auto max_comp = 0.0;
+                    auto max_comm = 0.0;
+                    for (auto i = 0; i < size; i++) {
                         std::cerr << "rank: " << i
                             << ", compute " << std::setw(5) << elapsed[2 * i]
                             << ", comm " << std::setw(5) << elapsed[2 * i + 1]
                             << std::endl;
+                        max_comp = std::max(max_comp, elapsed[2 * i]);
+                        max_comm = std::max(max_comm, elapsed[2 * i + 1]);
+                    }
+                    total_comm += max_comm - max_comp;
+                    total_compute += max_comp;
+                    std::cerr << "rank: a"
+                        << ", compute " << std::setw(5) << max_comp
+                        << ", comm " << std::setw(5) << max_comm
+                        << std::endl;
+                }
             }
 
             print<Enabled>("\n");
@@ -231,8 +243,8 @@ struct sssp
         print<Enabled>("] is ", dist[t], "\n");
 
         auto total = total_timer.elapsed_seconds();
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total_compute, 1, MPI::DOUBLE, MPI::MAX);
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total_comm,    1, MPI::DOUBLE, MPI::MAX);
+        // MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total_compute, 1, MPI::DOUBLE, MPI::MAX);
+        // MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total_comm,    1, MPI::DOUBLE, MPI::MAX);
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total,         1, MPI::DOUBLE, MPI::MAX);
         print<Enabled>("total compute elapsed ", total_compute, ", ");
         print<Enabled>("total comm elapsed ", total_comm, "\n");
