@@ -418,7 +418,8 @@ struct sssp
         MPI::COMM_WORLD.Barrier();
 
         // statistic
-        // last_updated.resize(n);
+        last_updated.resize(n);
+
         // dist.resize(n, edge::max());
         mdist = static_cast<int*>(std::malloc(sizeof(int) * n));
 
