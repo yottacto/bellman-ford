@@ -62,18 +62,34 @@ Still takes too long to converge. e.g. the convergence round of `4` hosts is
 |====
 
 
-=== metis partition with malloc
+=== metis partition with malloc (n * sizeof(int))
 
 [cols="^.^4, ^.^3, ^.^3, ^.^4, ^.^3", options="header"]
 |====
 
 | number of host / graph partition | convergence round | total time | total communication time | total computation time
-| 4                                | 7                 | 3.34       | 0.001                    | 3.18
+| 4                                | 7                 | 3.628      | 0.058                    | 3.41
 | 8                                | 17                | 1.878      | 0.007                    | 1.734
 | 12                               | 18                | 2.116      | 0.015                    | 1.97
 | 16                               | 17                | 1.949      | 0.077                    | 1.745
 | 20                               | 21                | 2.868      | 0.498                    | 2.283
 | 24                               | 16                | 2.575      | 0.137                    | 2.364
+
+|====
+
+
+=== metis partition with malloc (2\^30)
+
+[cols="^.^4, ^.^3, ^.^3, ^.^4, ^.^3", options="header"]
+|====
+
+| number of host / graph partition | convergence round | total time | total communication time | total computation time
+| 4                                | 7                 | 3.726      | 0.041                    | 3.525
+| 8                                | 17                | 1.925      | 0.033                    | 1.754
+| 12                               | 18                | 2.347      | 0.018                    | 2.199
+| 16                               | 17                | 2.028      | 0.066                    | 1.836
+| 20                               | 21                | 2.843      | 0.447                    | 2.297
+| 24                               | 16                | 2.548      | 0.121                    | 2.342
 
 |====
 
