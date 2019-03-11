@@ -223,9 +223,11 @@ struct sssp
                             << ", comm " << std::setw(5) << elapsed[2 * i + 1]
                             << std::endl;
                         max_comp = std::max(max_comp, elapsed[2 * i]);
-                        max_comm = std::max(max_comm, elapsed[2 * i + 1]);
+                        max_comm = std::max(max_comm, elapsed[2 * i + 1] + elapsed[2 * i]);
                     }
-                    total_comm += max_comm - max_comp;
+                    if (max_comm < max_comp)
+                        special_round = iter;
+                    total_comm += std::max(max_comm - max_comp, 0.);
                     total_compute += max_comp;
                     std::cerr << "rank: a"
                         << ", compute " << std::setw(5) << max_comp
@@ -486,7 +488,8 @@ struct sssp
             std::cerr << "\nunreachable nodes: " << unreachable << "\n";
             std::cerr << "all distance xor: " << xor_sum << "\n\n";
 
-            std::cerr << total << " | " << total_comm << " | " << total_compute << "\n";
+            std::cerr << "speical round: " << special_round << "\n";
+            std::cerr << size << " | " << iter - 1 << " | " << total << " | " << total_comm << " | " << total_compute << "\n";
         }
     }
 
@@ -517,6 +520,7 @@ struct sssp
     bool recv_empty;
 
     // statistic
+    int special_round{-1};
     std::vector<std::vector<int>> updated;
     std::vector<int> last_updated;
     double total;
