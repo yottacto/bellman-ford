@@ -242,7 +242,7 @@ struct sssp
         print<Enabled>("] to [", t);
         print<Enabled>("] is ", dist[t], "\n");
 
-        auto total = total_timer.elapsed_seconds();
+        total = total_timer.elapsed_seconds();
         // MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total_compute, 1, MPI::DOUBLE, MPI::MAX);
         // MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total_comm,    1, MPI::DOUBLE, MPI::MAX);
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total,         1, MPI::DOUBLE, MPI::MAX);
@@ -485,6 +485,8 @@ struct sssp
                     xor_sum ^= dist[i];
             std::cerr << "\nunreachable nodes: " << unreachable << "\n";
             std::cerr << "all distance xor: " << xor_sum << "\n\n";
+
+            std::cerr << total << " | " << total_comm << " | " << total_compute << "\n";
         }
     }
 
@@ -517,6 +519,7 @@ struct sssp
     // statistic
     std::vector<std::vector<int>> updated;
     std::vector<int> last_updated;
+    double total;
     double total_compute;
     double total_comm;
     timer compute_timer;
