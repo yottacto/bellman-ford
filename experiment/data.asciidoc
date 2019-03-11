@@ -24,10 +24,26 @@ All time are in seconds.
 
 === random partition
 
-It takes too long to converge. e.g. the convergence round of 4 hosts is far
-more than 2000.
+It takes too long to converge. e.g. the convergence round of `4` hosts is far
+more than `2000`.
 
 === continuous partition
+
+Still takes too long to converge. e.g. the convergence round of `4` hosts is
+`1220`.
+
+[cols="^.^4, ^.^3, ^.^3, ^.^4, ^.^3", options="header"]
+|====
+
+| number of host / graph partition | convergence round | total time | total communication time | total computation time
+| 4                                | 1220              | 399.01     | 59.575                   | 342.457
+| 8                                | 2886              | 1382.37    | 619.49                   | 822.921
+| 12                               |                   |            |                          |
+| 16                               |                   |            |                          |
+| 20                               |                   |            |                          |
+| 24                               |                   |            |                          |
+
+|====
 
 
 === metis partition
@@ -36,12 +52,14 @@ more than 2000.
 |====
 
 | number of host / graph partition | convergence round | total time | total communication time | total computation time
-| 4                                | 7                 | 3.24       | 0.003                    | 3.18
-| 8                                | 17                | 1.784      | 0.027                    | 1.7
-| 12                               | 18                | 2.055      | 0.014                    | 1.983
-| 16                               | 17                | 1.823      | 0.045                    | 1.721
-| 20                               | 21                | 1.474      | 0.032                    | 1.386
-| 24                               | 16                | 1.93       | 0.033                    | 1.844
+| 4                                | 7                 | 3.243      | 0.005                    | 3.183
+| 8                                | 17                | 1.803      | 0.02                     | 1.726
+| 12                               | 18                | 2.008      | 0.013                    | 1.939
+| 16                               | 17                | 1.88       | 0.014                    | 1.811
+| 20                               | 21                | 2.747      | 0.165                    | 2.548
+| 20                               | 21                | 2.506      | 0.129                    | 2.347
+| 20                               | 21                | 1.754      | 0.135                    | 1.604
+| 24                               | 16                | 2.444      | 0.212                    | 2.282
 
 |====
 
