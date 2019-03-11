@@ -508,7 +508,7 @@ struct sssp
             std::cerr << "all distance xor: " << xor_sum << "\n\n";
 
             std::cerr << "speical round: " << special_round << "\n";
-            std::cerr << size << " | " << iter - 1 << " | " << total << " | " << total_comm << " | " << total_compute << "\n";
+            std::cerr << "| " << size << " | " << iter - 1 << " | " << total << " | " << total_comm << " | " << total_compute << "\n";
         }
     }
 
