@@ -78,7 +78,7 @@ Still takes too long to converge. e.g. the convergence round of `4` hosts is
 |====
 
 
-=== metis partition with malloc (2\^30)
+=== metis partition with malloc (2^30)
 
 [cols="^.^4, ^.^3, ^.^3, ^.^4, ^.^3", options="header"]
 |====
