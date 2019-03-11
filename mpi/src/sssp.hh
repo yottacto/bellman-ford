@@ -7,6 +7,7 @@
 #include <limits>
 #include <vector>
 #include <queue>
+#include <cstdlib>
 #include <mpi.h>
 #include "util.hh"
 #include "timer.hh"
@@ -95,8 +96,8 @@ struct sssp
             if (u == -1)
                 continue;
             recv_empty = false;
-            if (value < dist[u]) {
-                dist[u] = value;
+            if (value < mdist[u]) {
+                mdist[u] = value;
                 if (info[u].boundary)
                     info[u].updated = true;
                 // statistic
@@ -116,23 +117,23 @@ struct sssp
 
             for (auto const& e : g[u]) {
                 auto v = e.to;
-                if (dist[v] <= dist[u] + e.cost)
+                if (mdist[v] <= mdist[u] + e.cost)
                     continue;
-                dist[v] = dist[u] + e.cost;
+                mdist[v] = mdist[u] + e.cost;
                 if (!info[v].inqueue) {
                     info[v].inqueue = true;
-                    pq.emplace(v, dist[v]);
+                    pq.emplace(v, mdist[v]);
                 }
 
                 // packing message and update statistic
                 if (!info[v].interior) {
                     if (info[v].iter == iter + 1) {
-                        recv_buf[info[v].index_in_recv_buf + 1] = dist[v];
+                        recv_buf[info[v].index_in_recv_buf + 1] = mdist[v];
                     } else {
                         info[v].iter = iter + 1;
                         info[v].index_in_recv_buf = len;
                         recv_buf.emplace_back(v);
-                        recv_buf.emplace_back(dist[v]);
+                        recv_buf.emplace_back(mdist[v]);
                         len += 2;
                         updated_count++;
                     }
@@ -151,7 +152,7 @@ struct sssp
             if (info[u].updated) {
                 info[u].updated = false;
                 info[u].inqueue = true;
-                pq.emplace(u, dist[u]);
+                pq.emplace(u, mdist[u]);
             }
     }
 
@@ -165,14 +166,21 @@ struct sssp
         total_compute = total_comm = 0.;
 
         total_timer.restart();
-        dist.clear();
-        dist.resize(n, edge::max());
+
+        // dist.clear();
+        // dist.resize(n, edge::max());
+        for (auto u = 0u; u < g.size(); u++) {
+            mdist[u] = edge::max();
+            for (auto const& e : g[u])
+                mdist[e.to] = edge::max();
+        }
+
         for (auto& i : info)
             i.iter = 0;
 
         // pq = {}; // server gcc 5.5.0 dont support
         if (info[s].owned) {
-            dist[s] = 0;
+            mdist[s] = 0;
             pq.emplace(s, 0);
         }
 
@@ -239,10 +247,10 @@ struct sssp
             print<Enabled>("\n");
         }
 
-        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &dist[t], 1, MPI::INT, MPI::MIN);
+        MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &mdist[t], 1, MPI::INT, MPI::MIN);
         print<Enabled>("distance from [", s);
         print<Enabled>("] to [", t);
-        print<Enabled>("] is ", dist[t], "\n");
+        print<Enabled>("] is ", mdist[t], "\n");
 
         total = total_timer.elapsed_seconds();
         // MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, &total_compute, 1, MPI::DOUBLE, MPI::MAX);
@@ -251,7 +259,7 @@ struct sssp
         print<Enabled>("total compute elapsed ", total_compute, ", ");
         print<Enabled>("total comm elapsed ", total_comm, "\n");
         print<Enabled>("total time elapsed ", total, "\n");
-        return dist[t];
+        return mdist[t];
     }
 
     template <class T>
@@ -410,8 +418,9 @@ struct sssp
         MPI::COMM_WORLD.Barrier();
 
         // statistic
-        last_updated.resize(n);
-        dist.resize(n, edge::max());
+        // last_updated.resize(n);
+        // dist.resize(n, edge::max());
+        mdist = static_cast<int*>(std::malloc(sizeof(int) * n));
 
         for (auto u : boundary_nodes)
             info[u].boundary = true;
@@ -476,6 +485,15 @@ struct sssp
         //     }
         // }
 
+        // TODO remove when remove mdist
+        dist.clear();
+        dist.resize(n, edge::max());
+        for (auto u = 0u; u < g.size(); u++) {
+            dist[u] = mdist[u];
+            for (auto const& e : g[u])
+                dist[e.to] = mdist[e.to];
+        }
+
         MPI::COMM_WORLD.Allreduce(MPI::IN_PLACE, dist.data(), n, MPI::INT, MPI::MIN);
         if (!rank) {
             auto xor_sum = 0;
@@ -514,6 +532,7 @@ struct sssp
     int iter;
     std::priority_queue<edge> pq;
     std::vector<int> dist;
+    int* mdist;
 
     int recv_count;
     std::vector<int> recv_buf;
