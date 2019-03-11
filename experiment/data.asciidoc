@@ -45,3 +45,19 @@ more than 2000.
 
 |====
 
+
+=== metis partition with malloc
+
+[cols="^.^4, ^.^3, ^.^3, ^.^4, ^.^3", options="header"]
+|====
+
+| number of host / graph partition | convergence round | total time | total communication time | total computation time
+| 4                                | 7                 | 3.337      | 0.005                    | 3.174
+| 8                                | 17                | 1.881      | 0.039                    | 1.703
+| 12                               | 18                | 2.088      | 0.014                    | 1.944
+| 16                               | 17                | 1.909      | 0.04                     | 1.743
+| 20                               | 21                | 1.769      | 0.045                    | 1.601
+| 24                               | 16                | 2.051      | 0.056                    | 1.874
+
+|====
+
